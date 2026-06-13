@@ -105,6 +105,30 @@ db.exec(`
   )
 `);
 
+// --- Knowledge Graph: entities + edges ---
+// Entities are the "nouns" — people, files, tech, concepts
+db.exec(`
+  CREATE TABLE IF NOT EXISTS entities (
+    id         INTEGER PRIMARY KEY,
+    name       TEXT NOT NULL UNIQUE,
+    type       TEXT NOT NULL,
+    created_at INTEGER DEFAULT (unixepoch())
+  )
+`);
+
+// Edges connect entities to memories (or entities to entities)
+db.exec(`
+  CREATE TABLE IF NOT EXISTS edges (
+    id          INTEGER PRIMARY KEY,
+    source_id   INTEGER NOT NULL,
+    target_id   INTEGER NOT NULL,
+    relation    TEXT NOT NULL,
+    source_type TEXT NOT NULL,
+    target_type TEXT NOT NULL,
+    created_at  INTEGER DEFAULT (unixepoch())
+  )
+`);
+
 console.error('[persyst] Schema initialized ✓');
 
 // ============================================================
@@ -172,7 +196,45 @@ const stmts = {
     FROM memories_vec
     WHERE embedding MATCH ?
     AND k = ?
-  `)
+  `),
+
+  // -- Entity CRUD --
+  insertEntity: db.prepare(
+    'INSERT OR IGNORE INTO entities (name, type) VALUES (?, ?)'
+  ),
+  getEntityByName: db.prepare(
+    'SELECT * FROM entities WHERE name = ?'
+  ),
+  getEntityById: db.prepare(
+    'SELECT * FROM entities WHERE id = ?'
+  ),
+  getAllEntities: db.prepare(
+    'SELECT * FROM entities ORDER BY created_at DESC LIMIT ?'
+  ),
+  deleteEntity: db.prepare(
+    'DELETE FROM entities WHERE id = ?'
+  ),
+
+  // -- Edges --
+  insertEdge: db.prepare(
+    'INSERT INTO edges (source_id, target_id, relation, source_type, target_type) VALUES (?, ?, ?, ?, ?)'
+  ),
+  getEdgesBySource: db.prepare(
+    'SELECT * FROM edges WHERE source_id = ? AND source_type = ?'
+  ),
+  getEdgesByTarget: db.prepare(
+    'SELECT * FROM edges WHERE target_id = ? AND target_type = ?'
+  ),
+  deleteEdgesByMemory: db.prepare(
+    `DELETE FROM edges WHERE
+     (source_id = ? AND source_type = 'memory') OR
+     (target_id = ? AND target_type = 'memory')`
+  ),
+
+  // -- Dedup --
+  findMemoryByContent: db.prepare(
+    'SELECT id FROM memories WHERE content LIKE ? LIMIT 1'
+  )
 };
 
 // ============================================================
@@ -310,6 +372,90 @@ export function searchKeyword(query, limit = 10) {
  */
 export function searchVector(embedding, limit = 10) {
   return stmts.searchVec.all(Buffer.from(embedding.buffer), limit);
+}
+
+// ============================================================
+// ENTITY FUNCTIONS (Knowledge Graph)
+// ============================================================
+
+/**
+ * Create a named entity (person, tech, file, concept, etc.).
+ * Silently skips if entity with that name already exists.
+ * @returns {number|null} The entity ID, or null if already existed
+ */
+export function insertEntity(name, type) {
+  const result = stmts.insertEntity.run(name, type);
+  if (result.changes === 0) {
+    // Already exists — return existing ID
+    const existing = stmts.getEntityByName.get(name);
+    return existing ? existing.id : null;
+  }
+  return Number(result.lastInsertRowid);
+}
+
+/**
+ * Get an entity by its name.
+ */
+export function getEntityByName(name) {
+  return stmts.getEntityByName.get(name) || null;
+}
+
+/**
+ * Get an entity by its ID.
+ */
+export function getEntityById(id) {
+  return stmts.getEntityById.get(id) || null;
+}
+
+/**
+ * Get all entities, most recent first.
+ */
+export function getAllEntities(limit = 50) {
+  return stmts.getAllEntities.all(limit);
+}
+
+/**
+ * Delete an entity and its edges.
+ */
+export function deleteEntity(id) {
+  stmts.deleteEntity.run(id);
+}
+
+/**
+ * Create an edge connecting two nodes (entity↔entity or entity↔memory).
+ */
+export function insertEdge(sourceId, targetId, relation, sourceType, targetType) {
+  stmts.insertEdge.run(sourceId, targetId, relation, sourceType, targetType);
+}
+
+/**
+ * Get all memories linked to an entity.
+ */
+export function getMemoriesByEntity(entityId) {
+  // Find edges where this entity is the source pointing to memories
+  const edges = stmts.getEdgesBySource.all(entityId, 'entity');
+  const memoryEdges = edges.filter(e => e.target_type === 'memory');
+  return memoryEdges.map(e => stmts.getById.get(e.target_id)).filter(Boolean);
+}
+
+/**
+ * Check if a memory with similar content already exists.
+ * Used for deduplication during git ingestion.
+ * @param {string} pattern - SQL LIKE pattern to match
+ * @returns {boolean}
+ */
+export function memoryExists(pattern) {
+  return stmts.findMemoryByContent.get(pattern) !== undefined;
+}
+
+/**
+ * Delete a memory and clean up its edges.
+ */
+export function deleteMemoryFull(id) {
+  stmts.deleteEdgesByMemory.run(id, id);
+  deleteVec(id);
+  const result = stmts.deleteMemory.run(id);
+  return result.changes > 0;
 }
 
 // ============================================================

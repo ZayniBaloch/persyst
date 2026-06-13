@@ -196,7 +196,8 @@ export function insertMemory(content, importance = 1.0) {
  * @param {Float32Array} embedding - 384-dim embedding vector
  */
 export function insertVector(id, embedding) {
-  stmts.insertVec.run(id, embedding.buffer);
+  // better-sqlite3 needs Buffer, sqlite-vec needs BigInt for rowid
+  stmts.insertVec.run(BigInt(id), Buffer.from(embedding.buffer));
 }
 
 /**
@@ -231,7 +232,7 @@ export function updateMemoryContent(id, content) {
  * Delete a vector embedding by memory ID.
  */
 export function deleteVec(id) {
-  try { stmts.deleteVec.run(id); } catch (e) { /* may not exist */ }
+  try { stmts.deleteVec.run(BigInt(id)); } catch (e) { /* may not exist */ }
 }
 
 /**
@@ -308,7 +309,7 @@ export function searchKeyword(query, limit = 10) {
  * @returns {Array<{rowid: number, distance: number}>}
  */
 export function searchVector(embedding, limit = 10) {
-  return stmts.searchVec.all(embedding.buffer, limit);
+  return stmts.searchVec.all(Buffer.from(embedding.buffer), limit);
 }
 
 // ============================================================

@@ -1,5 +1,5 @@
 document.addEventListener('DOMContentLoaded', () => {
-  // 1. Copy to clipboard functionality
+  // Copy to clipboard functionality
   const copyBtn = document.getElementById('copy-btn');
   const npmCommand = document.getElementById('npm-command');
 
@@ -8,40 +8,18 @@ document.addEventListener('DOMContentLoaded', () => {
       try {
         await navigator.clipboard.writeText(npmCommand.innerText);
         
-        // Visual feedback
+        // Visual feedback using Feather icons
         const originalIcon = copyBtn.innerHTML;
-        copyBtn.innerHTML = '<i class="fa-solid fa-check" style="color: #27c93f;"></i>';
+        copyBtn.innerHTML = '<i data-feather="check" style="color: #10b981;"></i>';
+        feather.replace(); // re-render the new icon
         
         setTimeout(() => {
           copyBtn.innerHTML = originalIcon;
+          feather.replace();
         }, 2000);
       } catch (err) {
         console.error('Failed to copy text: ', err);
       }
     });
   }
-
-  // 2. Scroll Reveal Animations
-  // Uses IntersectionObserver to trigger CSS transitions when elements enter viewport
-  const revealElements = document.querySelectorAll('.reveal');
-
-  const revealOptions = {
-    threshold: 0.15,
-    rootMargin: "0px 0px -50px 0px"
-  };
-
-  const revealOnScroll = new IntersectionObserver(function(entries, observer) {
-    entries.forEach(entry => {
-      if (!entry.isIntersecting) {
-        return;
-      } else {
-        entry.target.classList.add('active');
-        observer.unobserve(entry.target); // Stop observing once revealed
-      }
-    });
-  }, revealOptions);
-
-  revealElements.forEach(el => {
-    revealOnScroll.observe(el);
-  });
 });

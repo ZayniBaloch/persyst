@@ -23,7 +23,7 @@ import { mkdirSync } from 'fs';
 
 const DB_DIR = join(homedir(), '.persyst');
 mkdirSync(DB_DIR, { recursive: true });
-const DB_PATH = join(DB_DIR, 'persyst.db');
+const DB_PATH = process.env.NODE_ENV === 'test' ? ':memory:' : join(DB_DIR, 'persyst.db');
 
 // ============================================================
 // INITIALIZE CONNECTION

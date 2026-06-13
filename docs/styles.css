@@ -1,12 +1,12 @@
 :root {
-  --bg-color: #ffffff;
-  --surface-color: #fafafa;
-  --text-primary: #111827;
-  --text-secondary: #4b5563;
-  --border-color: #e5e7eb;
-  --border-hover: #d1d5db;
-  --accent: #2563eb; /* Clean professional blue */
-  --accent-hover: #1d4ed8;
+  --bg-color: #f8fafc; /* Slate 50 - very light cool gray */
+  --surface-color: #ffffff;
+  --text-primary: #0f172a; /* Slate 900 - elegant dark navy */
+  --text-secondary: #475569; /* Slate 600 */
+  --border-color: #e2e8f0;
+  --border-hover: #cbd5e1;
+  --accent: #4f46e5; /* Indigo 600 */
+  --accent-hover: #4338ca; /* Indigo 700 */
   
   --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
   --font-mono: 'JetBrains Mono', 'Menlo', monospace;
@@ -28,6 +28,7 @@ body {
   color: var(--text-primary);
   line-height: 1.6;
   -webkit-font-smoothing: antialiased;
+  border-top: 4px solid var(--accent); /* Elegant accent bar at the very top */
 }
 
 .container {
@@ -198,17 +199,19 @@ body {
 .btn-primary {
   display: inline-block;
   padding: 0.75rem 1.5rem;
-  background: var(--text-primary);
-  color: var(--bg-color);
+  background: linear-gradient(135deg, #4f46e5 0%, #3b82f6 100%);
+  color: #ffffff;
   text-decoration: none;
   border-radius: 6px;
   font-weight: 500;
   font-size: 0.95rem;
-  transition: opacity 0.15s;
+  transition: opacity 0.15s, box-shadow 0.15s;
+  box-shadow: 0 4px 6px -1px rgba(79, 70, 229, 0.2);
 }
 
 .btn-primary:hover {
-  opacity: 0.9;
+  opacity: 0.95;
+  box-shadow: 0 6px 8px -1px rgba(79, 70, 229, 0.3);
 }
 
 /* Features */
@@ -236,20 +239,38 @@ body {
   background: var(--surface-color);
   border: 1px solid var(--border-color);
   border-radius: 8px;
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.02);
 }
 
 .feature-icon {
-  width: 40px;
-  height: 40px;
+  width: 48px;
+  height: 48px;
   display: flex;
   align-items: center;
   justify-content: center;
-  background: #ffffff;
-  border: 1px solid var(--border-color);
-  border-radius: 8px;
+  border-radius: 10px;
   margin-bottom: 1.5rem;
-  color: var(--text-primary);
-  box-shadow: 0 1px 2px rgba(0,0,0,0.05);
+}
+
+/* Elegant colored tints for feature icons */
+.feature-card:nth-child(1) .feature-icon {
+  background: #e0e7ff; /* Indigo 100 */
+  color: #4f46e5;      /* Indigo 600 */
+}
+
+.feature-card:nth-child(2) .feature-icon {
+  background: #dcfce7; /* Emerald 100 */
+  color: #16a34a;      /* Emerald 600 */
+}
+
+.feature-card:nth-child(3) .feature-icon {
+  background: #f3e8ff; /* Purple 100 */
+  color: #9333ea;      /* Purple 600 */
+}
+
+.feature-card:nth-child(4) .feature-icon {
+  background: #ffedd5; /* Orange 100 */
+  color: #ea580c;      /* Orange 600 */
 }
 
 .feature-card h3 {

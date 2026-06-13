@@ -1,0 +1,33 @@
+{
+  "name": "persyst-mcp",
+  "version": "1.0.0",
+  "description": "Local-first MCP memory server with hybrid keyword + semantic search for coding agents",
+  "type": "module",
+  "main": "index.js",
+  "bin": {
+    "persyst-mcp": "./index.js"
+  },
+  "scripts": {
+    "start": "node index.js",
+    "test": "node test/smoke.js"
+  },
+  "keywords": [
+    "mcp",
+    "memory",
+    "sqlite",
+    "local-first",
+    "ai",
+    "agents",
+    "semantic-search",
+    "knowledge-graph"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "@huggingface/transformers": "^4.2.0",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "better-sqlite3": "^12.10.0",
+    "sqlite-vec": "^0.1.9",
+    "zod": "^3.23.0"
+  }
+}

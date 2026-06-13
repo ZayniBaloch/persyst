@@ -5,7 +5,7 @@
   "type": "module",
   "main": "index.js",
   "bin": {
-    "persyst-mcp": "./index.js"
+    "persyst-mcp": "index.js"
   },
   "scripts": {
     "start": "node index.js",

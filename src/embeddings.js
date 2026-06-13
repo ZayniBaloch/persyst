@@ -10,7 +10,11 @@
  * - Returns Float32Array ready for sqlite-vec
  */
 
-import { pipeline } from '@huggingface/transformers';
+import './setup-wasm.js';
+import { env, pipeline } from '@huggingface/transformers';
+
+// Disable WASM caching to prevent blob: URL ESM dynamic import error in Node.js
+env.useWasmCache = false;
 
 // The embedding pipeline (lazy-loaded on first use)
 let extractor = null;

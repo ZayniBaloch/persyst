@@ -22,8 +22,16 @@
     "semantic-search",
     "knowledge-graph"
   ],
-  "author": "",
+  "author": "Zayn",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ZayniBaloch/Peryst.git"
+  },
+  "bugs": {
+    "url": "https://github.com/ZayniBaloch/Peryst/issues"
+  },
+  "homepage": "https://github.com/ZayniBaloch/Peryst#readme",
   "dependencies": {
     "@huggingface/transformers": "^4.2.0",
     "@modelcontextprotocol/sdk": "^1.29.0",

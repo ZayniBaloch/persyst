@@ -1,0 +1,11 @@
+# Ignore tests and docs to keep the npm package small
+test/
+docs/
+
+# Ignore local config
+.npmrc
+.env
+
+# Standard ignores (npm ignores these anyway if in .gitignore, but good to be explicit)
+node_modules/
+db/

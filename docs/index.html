@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Persyst | Local-First Memory for AI Agents</title>
+  <meta name="description" content="Persyst is a local SQLite-based MCP memory server that gives coding agents like Claude Code and Aider persistent context across sessions.">
+  
+  <!-- Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Space+Grotesk:wght@500;700&display=swap" rel="stylesheet">
+  
+  <link rel="stylesheet" href="styles.css">
+  
+  <!-- Icons -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body>
+
+  <!-- Background decorative elements -->
+  <div class="glow glow-purple"></div>
+  <div class="glow glow-blue"></div>
+
+  <nav>
+    <div class="logo">
+      <i class="fa-solid fa-brain"></i> Persyst
+    </div>
+    <div class="links">
+      <a href="#features">Features</a>
+      <a href="#how-it-works">How it Works</a>
+      <a href="https://github.com/ZayniBaloch/Peryst" target="_blank" class="github-link"><i class="fa-brands fa-github"></i> GitHub</a>
+    </div>
+  </nav>
+
+  <header class="hero">
+    <div class="badge fade-in">✨ v1.0.0 Now on npm</div>
+    <h1 class="fade-in delay-1">Never lose context again.</h1>
+    <p class="subtitle fade-in delay-2">
+      A local-first, zero-egress MCP memory layer. Give your AI coding agents permanent memory, hybrid semantic search, and knowledge graph capabilities across sessions.
+    </p>
+    
+    <div class="cta-container fade-in delay-3">
+      <div class="terminal-box">
+        <span class="prompt">$</span>
+        <code id="npm-command">npx persyst-mcp</code>
+        <button id="copy-btn" aria-label="Copy command">
+          <i class="fa-regular fa-copy"></i>
+        </button>
+      </div>
+      <p class="cta-sub">Instantly start the memory server. Zero API keys required.</p>
+    </div>
+  </header>
+
+  <section id="features" class="features">
+    <h2 class="section-title">Why Persyst?</h2>
+    
+    <div class="grid">
+      <!-- Feature 1 -->
+      <div class="card reveal">
+        <div class="icon-box"><i class="fa-solid fa-bolt"></i></div>
+        <h3>Hybrid Search Engine</h3>
+        <p>Combines FTS5 exact keyword matching with HuggingFace local semantic embeddings for perfect recall.</p>
+      </div>
+
+      <!-- Feature 2 -->
+      <div class="card reveal">
+        <div class="icon-box"><i class="fa-solid fa-code-commit"></i></div>
+        <h3>Git Ingestion</h3>
+        <p>Turn your entire repository history into a searchable memory bank. Agents know <em>why</em> you wrote that code.</p>
+      </div>
+
+      <!-- Feature 3 -->
+      <div class="card reveal">
+        <div class="icon-box"><i class="fa-solid fa-project-diagram"></i></div>
+        <h3>Knowledge Graph</h3>
+        <p>Built-in entity and edge tables allow agents to traverse relationships between files, concepts, and people.</p>
+      </div>
+
+      <!-- Feature 4 -->
+      <div class="card reveal">
+        <div class="icon-box"><i class="fa-solid fa-shield-halved"></i></div>
+        <h3>100% Local & Private</h3>
+        <p>Everything runs entirely on your machine via SQLite and local transformers. Zero cloud dependencies. Zero egress.</p>
+      </div>
+    </div>
+  </section>
+
+  <section id="how-it-works" class="how-it-works reveal">
+    <h2 class="section-title">How it works</h2>
+    <div class="code-showcase">
+      <div class="window-header">
+        <span class="dot red"></span>
+        <span class="dot yellow"></span>
+        <span class="dot green"></span>
+        <span class="title">aider --model sonnet</span>
+      </div>
+      <div class="window-body">
+        <div class="line user"><span class="prompt">></span> Why did we choose Postgres over MySQL?</div>
+        <div class="line ai-action"><span class="icon">⚙️</span> Calling <span class="highlight">search_memories("Postgres vs MySQL")</span>...</div>
+        <div class="line ai"><span class="icon">🤖</span> Based on a memory from last month, we chose Postgres because of its superior JSONB support for the analytics pipeline.</div>
+        <div class="line user"><span class="prompt">></span> Remember that all new components must use Hooks.</div>
+        <div class="line ai-action"><span class="icon">⚙️</span> Calling <span class="highlight">add_memory("All new components must use Hooks")</span>...</div>
+        <div class="line ai"><span class="icon">🤖</span> Got it! I've permanently stored that convention in my memory.</div>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    <div class="footer-content">
+      <div class="logo">
+        <i class="fa-solid fa-brain"></i> Persyst
+      </div>
+      <p>Built for the next generation of autonomous coding agents.</p>
+      <div class="socials">
+        <a href="https://www.npmjs.com/package/persyst-mcp" target="_blank">npm package</a>
+        <a href="https://github.com/ZayniBaloch/Peryst" target="_blank">GitHub repository</a>
+      </div>
+    </div>
+    <div class="copyright">
+      &copy; 2026 Zayn. Released under the MIT License.
+    </div>
+  </footer>
+
+  <script src="script.js"></script>
+</body>
+</html>

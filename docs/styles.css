@@ -487,6 +487,11 @@ body::before {
   color: #10b981;
 }
 
+.feature-card:nth-child(7) .feature-icon {
+  background: rgba(217, 119, 6, 0.06);
+  color: #d97706;
+}
+
 .feature-card h3 {
   font-family: var(--font-serif);
   font-size: 1.25rem;
@@ -852,6 +857,7 @@ footer {
 @media (max-width: 860px) {
   .nav-links { display: none; }
   .integration-layout { grid-template-columns: 1fr; gap: 3rem; }
+  .features-grid { grid-template-columns: 1fr; gap: 1.5rem; }
   .hero { padding: 6rem 1.5rem 4rem; }
   .hero h1 { font-size: 2.5rem; }
   .metrics { grid-template-columns: repeat(2, 1fr); margin-top: 4rem; }

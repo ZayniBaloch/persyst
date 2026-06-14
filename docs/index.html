@@ -128,6 +128,12 @@
             <p>Reranks matches using MMR algorithms to promote diversity and penalize redundancy, keeping prompt contexts concise and clean.</p>
           </div>
 
+          <div class="feature-card">
+            <div class="feature-icon"><i data-feather="users"></i></div>
+            <h3>Agentic Swarm Isolation</h3>
+            <p>Partition memory namespaces by Agent ID. Each agent in a swarm maintains private memories while seamlessly sharing project-level knowledge.</p>
+          </div>
+
         </div>
       </div>
     </section>
@@ -176,6 +182,11 @@
                 <td class="highlight-cell"><i data-feather="layers" class="check-inline"></i> Local (50MB model)</td>
                 <td>OpenAI/Claude API calls</td>
               </tr>
+              <tr>
+                <td><strong>Agentic Swarms</strong></td>
+                <td class="highlight-cell"><i data-feather="users" class="check-inline"></i> Per-agent namespace isolation</td>
+                <td>Global shared state (no partitioning)</td>
+              </tr>
             </tbody>
           </table>
         </div>
@@ -187,7 +198,7 @@
       <div class="container integration-layout">
         <div class="integration-text">
           <h2>Standard MCP Tools</h2>
-          <p>Persyst implements the Model Context Protocol (MCP). Any compliant agent can use its tools over standard stdio streams. No custom integration needed.</p>
+          <p>Persyst implements the Model Context Protocol (MCP). Any compliant agent can use its tools over standard stdio streams. No custom integration needed. Version 2.1.2 supports per-agent namespace partitioning using the optional <code>agent_id</code> and <code>shared</code> parameters.</p>
           <div style="margin-top: 1.5rem;">
             <h4 style="margin-bottom: 0.5rem; font-size: 1rem; font-weight: 600;">Core Memory Tools</h4>
             <ul class="tool-list" style="margin-bottom: 1.5rem;">

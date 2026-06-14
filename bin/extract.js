@@ -53,11 +53,6 @@ if (flags.help || args.length === 0) {
     echo "text" | npx persyst-mcp extract -  Extract from stdin
 
   OPTIONS:
-    --tier <tier>          Extraction tier: 'heuristic' (Tier 2) or 'llm' (Tier 3)
-                           Default: both (heuristic first, then LLM)
-    --provider <name>      LLM provider: 'ollama', 'gemini', 'openai'
-                           Default: cascading (ollama → gemini → openai)
-    --model <model>        Override model name (e.g., 'llama3.2:3b')
     --dry-run              Show extracted facts without storing to database
     --json                 Output results as JSON
     --file <path>          Read text from a file
@@ -65,9 +60,7 @@ if (flags.help || args.length === 0) {
 
   EXAMPLES:
     npx persyst-mcp extract "I prefer Postgres over SQLite"
-    npx persyst-mcp extract --tier heuristic "we use TypeScript"
     npx persyst-mcp extract --dry-run --file ./conversation.log
-    npx persyst-mcp extract --provider gemini "our backend uses Express"
   `);
   process.exit(0);
 }
@@ -107,55 +100,23 @@ if (!inputText.trim()) {
 // ============================================================
 
 async function run() {
-  const tier = flags.tier || 'both';
   const dryRun = flags['dry-run'] === true;
   const jsonOutput = flags.json === true;
 
   const allFacts = [];
 
   // --- Tier 2: Heuristic ---
-  if (tier === 'heuristic' || tier === 'both') {
-    const { extractHeuristic } = await import('../src/extractor-heuristic.js');
-    const heuristicFacts = extractHeuristic(inputText);
+  const { extractHeuristic } = await import('../src/extractor-heuristic.js');
+  const heuristicFacts = extractHeuristic(inputText);
 
-    for (const f of heuristicFacts) {
-      allFacts.push({ ...f, tier: 'heuristic' });
-    }
-
-    if (!jsonOutput) {
-      console.log(`\n📋 Tier 2 (Heuristic): ${heuristicFacts.length} fact(s) extracted`);
-      for (const f of heuristicFacts) {
-        console.log(`  ✓ [${f.category}] (conf: ${f.confidence}) ${f.content}`);
-      }
-    }
+  for (const f of heuristicFacts) {
+    allFacts.push({ ...f, tier: 'heuristic' });
   }
 
-  // --- Tier 3: LLM ---
-  if (tier === 'llm' || tier === 'both') {
-    const { extractWithLLM } = await import('../src/extractor-llm.js');
-
-    if (!jsonOutput) {
-      console.log(`\n🤖 Tier 3 (LLM): Extracting...`);
-    }
-
-    const result = await extractWithLLM(inputText, {
-      provider: flags.provider,
-      model: flags.model
-    });
-
-    for (const f of result.facts) {
-      allFacts.push({ ...f, tier: 'llm' });
-    }
-
-    if (!jsonOutput) {
-      if (result.error) {
-        console.log(`  ⚠ Provider error: ${result.error}`);
-      }
-      console.log(`  Provider: ${result.provider}`);
-      console.log(`  Facts: ${result.facts.length}`);
-      for (const f of result.facts) {
-        console.log(`  ✓ [${f.category}] (conf: ${f.confidence}) ${f.content}`);
-      }
+  if (!jsonOutput) {
+    console.log(`\n📋 Heuristic fact(s) extracted: ${heuristicFacts.length}`);
+    for (const f of heuristicFacts) {
+      console.log(`  ✓ [${f.category}] (conf: ${f.confidence}) ${f.content}`);
     }
   }
 

@@ -58,19 +58,7 @@ const DEDUP_SIMILARITY_THRESHOLD = 0.80;
 const RECENT_MEMORY_WINDOW_S = 60; // Check last 60 seconds for agent race
 const MIN_CONFIDENCE = 0.65;
 
-/**
- * Load Persyst config from ~/.persyst/config.json if it exists.
- * @returns {Object}
- */
-function loadConfig() {
-  const configPath = join(homedir(), '.persyst', 'config.json');
-  try {
-    if (existsSync(configPath)) {
-      return JSON.parse(readFileSync(configPath, 'utf8'));
-    }
-  } catch (_) { /* fallback to defaults */ }
-  return {};
-}
+
 
 // ============================================================
 // LOGGING
@@ -281,7 +269,6 @@ async function main() {
     log('INFO', `Processing ${jobs.length} job(s)...`);
 
     // Lazy-load heavy dependencies only if we have work to do
-    const { extractWithLLM } = await import('../src/extractor-llm.js');
     const dbModule = await import('../src/database.js');
     const { searchHybrid } = await import('../src/search.js');
     const { generateEmbedding } = await import('../src/embeddings.js');
@@ -312,27 +299,7 @@ async function main() {
           log('ERROR', `Heuristic extraction failed: ${heurErr.message}`);
         }
 
-        // 2. Run Tier 3 LLM Extraction (unless disabled)
-        const config = loadConfig();
-        const disableTier3 = config.disable_tier3 || process.env.DISABLE_TIER3 === 'true';
-
-        if (!disableTier3) {
-          const result = await extractWithLLM(data.text, {
-            provider: data.provider,
-            model: data.model
-          });
-
-          if (result.error) {
-            log('WARN', `LLM Extraction error: ${result.error}`);
-          }
-
-          for (const f of result.facts) {
-            facts.push({ ...f, tier: 'llm' });
-          }
-          log('INFO', `Extracted ${heuristicFacts.length} heuristic, ${result.facts.length} LLM fact(s)`);
-        } else {
-          log('INFO', `Extracted ${facts.length} heuristic fact(s) (Tier 3 disabled)`);
-        }
+        log('INFO', `Extracted ${facts.length} heuristic fact(s)`);
 
         // Deduplicate facts within this run
         const uniqueFacts = [];

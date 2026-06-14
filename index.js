@@ -29,7 +29,8 @@ if (subcommand === 'setup') {
   // Delegate to the rules init CLI
   await import('./bin/init.js');
 } else if (subcommand === 'ingest') {
-  // Delegate to the git commit ingestion CLI
+  // Shift 'ingest' from process.argv so ingest.js gets the correct arguments
+  process.argv.splice(2, 1);
   await import('./bin/ingest.js');
 } else {
   // Default: start the MCP server

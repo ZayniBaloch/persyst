@@ -19,6 +19,8 @@ import { generateEmbedding } from './embeddings.js';
 import { createAttestation } from './attestation.js';
 import { searchCache, LRUCache } from './cache.js';
 
+let lastDataVersion = 0;
+
 /**
  * Search memories using both keyword and semantic strategies.
  * Results are cached in the LRU cache for repeated queries.
@@ -30,6 +32,17 @@ import { searchCache, LRUCache } from './cache.js';
  * @returns {Promise<Array>} Ranked search results (with .attestation property attached)
  */
 export async function searchHybrid(queryText, limit = 5, agentId = null, sessionId = null) {
+  // Sync in-memory cache with external DB changes using sqlite data_version
+  try {
+    const currentDataVersion = db.pragma('data_version', { simple: true });
+    if (currentDataVersion !== lastDataVersion) {
+      searchCache.invalidate();
+      lastDataVersion = currentDataVersion;
+    }
+  } catch (_) {
+    // Fallback if pragma fails
+  }
+
   // --- Check LRU cache first (Feature 1) ---
   const cacheKey = LRUCache.key(queryText, limit);
   const cached = searchCache.get(cacheKey);

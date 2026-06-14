@@ -277,7 +277,18 @@
             </div>
             <!-- VS Code Pane -->
             <div id="tab-vscode" class="tab-pane">
-              <p class="config-desc">1. Add to your Cline/Roo Code configuration settings at <code>cline_mcp_settings.json</code>:</p>
+              <p class="config-desc"><strong>Option A: Visual Setup (Recommended)</strong></p>
+              <p class="config-desc">1. In Roo Code / Cline, click the <strong>+</strong> button to add a new MCP server.</p>
+              <p class="config-desc">2. Choose <strong>Command (stdio)</strong> and configure:</p>
+              <div class="config-steps" style="margin-bottom: 1.5rem;">
+                <ol style="margin-left: 1.5rem; color: var(--text-secondary); font-size: 0.95rem;">
+                  <li style="margin-bottom: 0.5rem;">Set Name to <code>persyst</code></li>
+                  <li style="margin-bottom: 0.5rem;">Set Command to <code>npx</code></li>
+                  <li style="margin-bottom: 0.5rem;">Set Arguments to <code>-y, persyst-mcp</code></li>
+                </ol>
+              </div>
+              <p class="config-desc"><strong>Option B: Manual JSON Config</strong></p>
+              <p class="config-desc">Add the server to your <code>cline_mcp_settings.json</code> settings file:</p>
               <pre><code>{
   "mcpServers": {
     "persyst": {
@@ -286,9 +297,9 @@
     }
   }
 }</code></pre>
-              <p class="config-desc" style="margin-top: 1rem;">2. Auto-generate system prompt instructions:</p>
+              <p class="config-desc" style="margin-top: 1.5rem;"><strong>3. Initialize Workspace Rules &amp; Swarm Settings:</strong></p>
               <pre><code>npx persyst-mcp init</code></pre>
-              <p class="config-desc">This creates a <code>.persystrules.md</code> general guide with copy-pasteable custom system instructions for your agents.</p>
+              <p class="config-desc">This creates a <code>.persystrules.md</code> file that teaches your agent how to query and store memories. To enable <strong>agentic swarm isolation</strong>, instruct your agents to pass their unique agent name as <code>agent_id</code> and set <code>shared: false</code> for private memories.</p>
               <div class="note">VS Code will spin up the server, and the instructions will force the agent to use it proactively.</div>
             </div>
             <!-- Aider Pane -->

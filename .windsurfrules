@@ -4,9 +4,10 @@ You are integrated with Persyst, a local-first MCP memory server that stores use
 ## Proactive Memory Retrieval (CRITICAL)
 - Before responding to the user's prompt or executing any task, you MUST invoke the `persyst` MCP server's `search_memories` or `get_optimized_context` tool.
 - Extract relevant search terms from the user's prompt (e.g. if the user says "update the database schema", query "database", "schema", "sqlite", "table").
-- This ensures you are aware of existing codebase architecture, constraints, preferences, or past decisions before writing code.
+- Provide your agent name (e.g. `cursor-agent`, `roo-code`) as the `agent_id` parameter when searching to query your private namespace + shared project context.
 
 ## Proactive Memory Storage (CRITICAL)
 - Record Milestones: When you successfully implement a feature, fix a bug, or make an architectural decision, call the `add_memory` tool to store a summary of the change.
+- Agentic Swarms & Namespaces: If you are part of a multi-agent swarm or need private partition, pass your agent name as `agent_id` and set `shared: false` to store private memories. For general project guidelines and files, leave `shared: true` (default) so other agents can access them.
 - Handle Contradictions: Persyst handles contradiction detection automatically. If a new fact contradicts an old memory, Persyst will flag it.
 - Quality Over Quantity: Do NOT store trivial facts, temporary conversation noise, or duplicate data. "Bad data is worse than no data". Only store long-term architecture decisions, project details, and explicit user preferences.

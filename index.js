@@ -32,6 +32,13 @@ if (subcommand === 'setup') {
   // Shift 'ingest' from process.argv so ingest.js gets the correct arguments
   process.argv.splice(2, 1);
   await import('./bin/ingest.js');
+} else if (subcommand === 'extract') {
+  // Shift 'extract' from process.argv so extract.js gets the correct arguments
+  process.argv.splice(2, 1);
+  await import('./bin/extract.js');
+} else if (subcommand === 'worker') {
+  // Run the background extraction worker directly
+  await import('./bin/extract-worker.js');
 } else {
   // Default: start the MCP server
   const { startServer } = await import('./src/server.js');

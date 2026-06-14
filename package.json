@@ -9,7 +9,9 @@
     "persyst-setup": "bin/setup.js",
     "persyst-aider": "bin/aider.js",
     "persyst-init": "bin/init.js",
-    "persyst-ingest": "bin/ingest.js"
+    "persyst-ingest": "bin/ingest.js",
+    "persyst-extract": "bin/extract.js",
+    "persyst-worker": "bin/extract-worker.js"
   },
   "engines": {
     "node": ">=18.0.0"
@@ -25,7 +27,9 @@
   "scripts": {
     "start": "node index.js",
     "test": "node test/smoke.js",
-    "test:heavy": "cross-env NODE_ENV=test node --test test/test_*.js"
+    "test:heavy": "cross-env NODE_ENV=test node --test test/test_*.js",
+    "worker": "node bin/extract-worker.js",
+    "extract": "node bin/extract.js"
   },
   "keywords": [
     "mcp",

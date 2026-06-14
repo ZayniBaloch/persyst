@@ -1,37 +1,65 @@
 #!/usr/bin/env node
 
 /**
- * persyst-hook.js — Claude Code Hook for Persyst Memory
+ * persyst-hook.js — Claude Code Hook for Persyst Memory (PAMP-Enhanced)
  * 
  * Automatically injects relevant memories into Claude Code's context
- * on SessionStart and UserPromptSubmit events.
+ * on SessionStart and UserPromptSubmit events, and queues conversation
+ * turns for async background extraction on Stop events.
+ * 
+ * PAMP Integration (Persyst Auto-Memory Pipeline):
+ *   - Tier 1: Agent-explicit add_memory calls (existing, unchanged)
+ *   - Tier 2: Heuristic regex extraction on UserPromptSubmit (sync, zero-cost)
+ *   - Tier 3: Async LLM extraction via background worker (spawned on Stop)
  * 
  * How it works:
- *   1. Claude Code sends a JSON payload on stdin with hook_event_name, session_id, cwd, etc.
+ *   1. Claude Code sends a JSON payload on stdin with hook_event_name, session_id, etc.
  *   2. This script connects to the Persyst MCP server via StdioClientTransport.
  *   3. It calls get_optimized_context or search_memories to retrieve relevant memories.
  *   4. It returns a JSON response on stdout with additionalContext for Claude Code to inject.
+ *   5. On Stop: queues the conversation text for background LLM extraction.
  * 
  * Installation:
  *   npx persyst-mcp setup
  * 
  * Manual registration in ~/.claude/settings.json:
- *   { "hooks": { "SessionStart": [...], "UserPromptSubmit": [...] } }
+ *   { "hooks": { "SessionStart": [...], "UserPromptSubmit": [...], "Stop": [...] } }
  */
 
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { fileURLToPath } from 'url';
-import { dirname, resolve } from 'path';
+import { dirname, resolve, join } from 'path';
+import { spawn } from 'child_process';
+import { writeFileSync, readdirSync, mkdirSync, existsSync } from 'fs';
+import { homedir } from 'os';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
+
+// ============================================================
+// CONFIGURATION
+// ============================================================
 
 // Minimum prompt length to trigger memory search (skip "y", "ok", "/run", etc.)
 const MIN_PROMPT_LENGTH = 15;
 
 // Maximum time to wait for Persyst MCP connection (ms)
 const CONNECTION_TIMEOUT = 8000;
+
+// Hard timeout for the entire hook execution (ms)
+// Claude Code will kill the hook if it exceeds this
+const MAX_HOOK_LATENCY_MS = 500;
+
+// Maximum active queue jobs before skipping worker spawn
+const MAX_QUEUE_JOBS = 20;
+
+// Queue directory for background extraction jobs
+const QUEUE_DIR = join(homedir(), '.persyst', 'queue');
+
+// ============================================================
+// STDIN READER
+// ============================================================
 
 /**
  * Read the full JSON payload from stdin.
@@ -52,6 +80,10 @@ function readStdin() {
     process.stdin.on('error', reject);
   });
 }
+
+// ============================================================
+// MCP CLIENT CONNECTION
+// ============================================================
 
 /**
  * Connect to the Persyst MCP server as a client.
@@ -92,6 +124,85 @@ async function callTool(client, toolName, args) {
   }
   return null;
 }
+
+// ============================================================
+// PAMP: QUEUE MANAGEMENT
+// ============================================================
+
+/**
+ * Count active job files in the queue directory.
+ * Used for worker pool protection — don't spawn if overloaded.
+ * @returns {number}
+ */
+function countQueueJobs() {
+  try {
+    if (!existsSync(QUEUE_DIR)) return 0;
+    return readdirSync(QUEUE_DIR).filter(f => f.endsWith('.json')).length;
+  } catch (_) {
+    return 0;
+  }
+}
+
+/**
+ * Write a conversation turn to the extraction queue.
+ * @param {string} text - The conversation text to extract from
+ * @param {Object} meta - Metadata (session_id, agent_id, etc.)
+ */
+function enqueueJob(text, meta = {}) {
+  try {
+    mkdirSync(QUEUE_DIR, { recursive: true });
+
+    const jobId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const jobFile = join(QUEUE_DIR, `${jobId}.json`);
+
+    writeFileSync(jobFile, JSON.stringify({
+      text,
+      session_id: meta.session_id || null,
+      agent_id: meta.agent_id || 'claude-code',
+      cwd: meta.cwd || null,
+      queued_at: new Date().toISOString(),
+      _retries: 0
+    }, null, 2));
+
+    return jobId;
+  } catch (err) {
+    // Non-critical — log and continue
+    process.stderr.write(`[persyst-hook] Queue write failed: ${err.message}\n`);
+    return null;
+  }
+}
+
+/**
+ * Spawn the background extraction worker as a detached process.
+ * The worker runs independently — hook doesn't wait for it.
+ */
+function spawnWorker() {
+  // Check queue depth first
+  const queueDepth = countQueueJobs();
+  if (queueDepth > MAX_QUEUE_JOBS) {
+    process.stderr.write(`[persyst-hook] Queue overloaded (${queueDepth} jobs), skipping worker spawn.\n`);
+    return;
+  }
+
+  try {
+    const workerPath = resolve(__dirname, '..', 'bin', 'extract-worker.js');
+
+    const child = spawn('node', [workerPath], {
+      detached: true,
+      stdio: 'ignore',
+      env: { ...process.env }
+    });
+
+    // Unref so the hook can exit without waiting for the worker
+    child.unref();
+  } catch (err) {
+    process.stderr.write(`[persyst-hook] Worker spawn failed: ${err.message}\n`);
+  }
+}
+
+// ============================================================
+// EVENT HANDLERS
+// ============================================================
 
 /**
  * Handle SessionStart: load project-wide context and ingest git history.
@@ -152,6 +263,7 @@ async function handleSessionStart(client, input) {
 
 /**
  * Handle UserPromptSubmit: search for memories relevant to the user's prompt.
+ * Also runs Tier 2 heuristic extraction inline (zero-cost).
  */
 async function handleUserPromptSubmit(client, input) {
   const prompt = input.prompt || '';
@@ -161,6 +273,25 @@ async function handleUserPromptSubmit(client, input) {
     return {};
   }
 
+  // --- Tier 2: Run heuristic extraction inline (sync, zero-cost) ---
+  // We don't store results here — we queue them alongside the LLM job.
+  // This just detects if there's extractable signal in the prompt.
+  let heuristicFacts = [];
+  try {
+    const { extractHeuristic } = await import('../src/extractor-heuristic.js');
+    heuristicFacts = extractHeuristic(prompt);
+  } catch (_) {
+    // Heuristic module not available — Tier 3 will handle it
+  }
+
+  // Queue the prompt for Tier 3 background extraction (non-blocking)
+  enqueueJob(prompt, {
+    session_id: input.session_id,
+    agent_id: 'claude-code',
+    cwd: input.cwd
+  });
+
+  // --- Memory Retrieval (existing behavior) ---
   // Use search_memories for speed on per-prompt lookups (faster than get_optimized_context)
   const searchResult = await callTool(client, 'search_memories', {
     query: prompt.slice(0, 200), // Truncate very long prompts for search efficiency
@@ -178,6 +309,13 @@ async function handleUserPromptSubmit(client, input) {
   for (const mem of searchResult.results) {
     contextLines.push(`• [Memory #${mem.id}] ${mem.content}`);
   }
+
+  // Add heuristic extraction notice if any facts were detected
+  if (heuristicFacts.length > 0) {
+    contextLines.push('');
+    contextLines.push(`[PAMP: ${heuristicFacts.length} fact signal(s) detected, queued for extraction]`);
+  }
+
   contextLines.push('=== END MEMORY ===');
 
   return {
@@ -189,8 +327,31 @@ async function handleUserPromptSubmit(client, input) {
 }
 
 /**
- * Main entry point.
+ * Handle Stop: queue the final conversation turn for background extraction
+ * and spawn the worker to process the queue.
  */
+async function handleStop(input) {
+  // The Stop event may include conversation_turns or transcript data
+  const transcript = input.transcript || input.conversation || '';
+
+  if (transcript && typeof transcript === 'string' && transcript.length > MIN_PROMPT_LENGTH) {
+    enqueueJob(transcript, {
+      session_id: input.session_id,
+      agent_id: 'claude-code',
+      cwd: input.cwd
+    });
+  }
+
+  // Spawn background worker to process all queued jobs
+  spawnWorker();
+
+  return {};
+}
+
+// ============================================================
+// MAIN ENTRY POINT
+// ============================================================
+
 async function main() {
   let client = null;
 
@@ -198,20 +359,37 @@ async function main() {
     const input = await readStdin();
     const eventName = input.hook_event_name;
 
+    // Handle Stop event without MCP connection (just queue + spawn)
+    if (eventName === 'Stop') {
+      const response = await handleStop(input);
+      console.log(JSON.stringify(response));
+      return;
+    }
+
     // Only handle events we care about
     if (eventName !== 'SessionStart' && eventName !== 'UserPromptSubmit') {
       console.log(JSON.stringify({}));
       return;
     }
 
-    // Connect to Persyst
+    // Connect to Persyst with hard timeout
+    const hookStart = Date.now();
     client = await connectToPersyst();
 
     let response;
     if (eventName === 'SessionStart') {
       response = await handleSessionStart(client, input);
     } else if (eventName === 'UserPromptSubmit') {
-      response = await handleUserPromptSubmit(client, input);
+      // Apply hard timeout for prompt-time hook execution
+      response = await Promise.race([
+        handleUserPromptSubmit(client, input),
+        new Promise((resolve) =>
+          setTimeout(() => {
+            process.stderr.write(`[persyst-hook] UserPromptSubmit hit ${MAX_HOOK_LATENCY_MS}ms timeout, returning partial.\n`);
+            resolve({});
+          }, MAX_HOOK_LATENCY_MS - (Date.now() - hookStart))
+        )
+      ]);
     } else {
       response = {};
     }

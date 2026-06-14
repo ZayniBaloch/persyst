@@ -55,8 +55,8 @@ export async function getRecentCommits(repoPath, count = 20) {
 
       // Build a readable memory string
       let fullText = body
-        ? `[${hash.slice(0, 7)}] ${subject} — by ${author} on ${date}. ${body}`
-        : `[${hash.slice(0, 7)}] ${subject} — by ${author} on ${date}`;
+        ? `[${hash.slice(0, 7)}] Commit: ${subject} — by ${author} on ${date}. ${body}`
+        : `[${hash.slice(0, 7)}] Commit: ${subject} — by ${author} on ${date}`;
 
       if (notes) {
         fullText += ` [PR Notes] ${notes}`;

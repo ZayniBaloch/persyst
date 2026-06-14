@@ -14,4 +14,7 @@
 
 import { startServer } from './src/server.js';
 
-startServer();
+await startServer().catch(err => {
+  console.error('❌ Persyst failed to start:', err.message);
+  process.exit(1);
+});

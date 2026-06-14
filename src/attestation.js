@@ -1,0 +1,206 @@
+/**
+ * attestation.js — Cryptographic Attestation Engine
+ * 
+ * Implements Ed25519 signature generation and verification for search queries.
+ * Chains each attestation by linking to the hash of the previous one.
+ */
+
+import crypto from 'crypto';
+import { mkdirSync, readFileSync, writeFileSync, existsSync } from 'fs';
+import { join } from 'path';
+import { homedir } from 'os';
+import db, { getLastAttestation, insertAttestation, getAttestationById } from './database.js';
+
+const KEYS_DIR = join(homedir(), '.persyst', 'keys');
+
+/**
+ * Initialize keypair if it doesn't already exist.
+ */
+export function initializeKeys() {
+  mkdirSync(KEYS_DIR, { recursive: true });
+  const pubPath = join(KEYS_DIR, 'public.pem');
+  const privPath = join(KEYS_DIR, 'private.pem');
+
+  if (!existsSync(pubPath) || !existsSync(privPath)) {
+    const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519', {
+      publicKeyEncoding: { type: 'spki', format: 'pem' },
+      privateKeyEncoding: { type: 'pkcs8', format: 'pem' }
+    });
+    writeFileSync(pubPath, publicKey);
+    writeFileSync(privPath, privateKey);
+    console.error('[persyst] Generated new Ed25519 keypair for attestation');
+  }
+}
+
+/**
+ * Read private key.
+ */
+function getPrivateKey() {
+  const privPath = join(KEYS_DIR, 'private.pem');
+  return readFileSync(privPath, 'utf8');
+}
+
+/**
+ * Read public key.
+ */
+export function getPublicKey() {
+  const pubPath = join(KEYS_DIR, 'public.pem');
+  return readFileSync(pubPath, 'utf8');
+}
+
+/**
+ * Generate a new attestation for search results.
+ */
+export function createAttestation(query, memories, agentId = null, sessionId = null) {
+  initializeKeys();
+
+  const attestationId = crypto.randomUUID();
+  const timestamp = new Date().toISOString();
+
+  // Map memories to {id, content_hash, score}
+  const memoriesRetrieved = memories.map(m => {
+    const contentHash = crypto.createHash('sha256').update(m.content).digest('hex');
+    return {
+      id: m.id,
+      content_hash: contentHash,
+      score: parseFloat(m.hybrid_score || 0)
+    };
+  });
+
+  // Fetch previous attestation hash for the hash chain
+  const lastAtt = getLastAttestation();
+  const previousHash = lastAtt ? lastAtt.hash : null;
+
+  // Construct document to sign (ordered keys to ensure canonical serialization)
+  const doc = {
+    attestation_id: attestationId,
+    query,
+    timestamp,
+    memories_retrieved: memoriesRetrieved,
+    agent_id: agentId || null,
+    session_id: sessionId || null,
+    previous_hash: previousHash
+  };
+
+  const dataToSign = JSON.stringify(doc);
+
+  // Sign document using Ed25519
+  const privateKey = getPrivateKey();
+  const signature = crypto.sign(null, Buffer.from(dataToSign), {
+    key: privateKey,
+    type: 'pkcs8',
+    format: 'pem'
+  }).toString('hex');
+
+  // Construct full record and compute its hash
+  const fullAttestation = {
+    ...doc,
+    signature
+  };
+
+  const hash = crypto.createHash('sha256').update(JSON.stringify(fullAttestation)).digest('hex');
+
+  const record = {
+    ...fullAttestation,
+    hash
+  };
+
+  // Persist to DB
+  insertAttestation(record);
+
+  return record;
+}
+
+/**
+ * Verify a single attestation record's signature and hash.
+ */
+export function verifyAttestationRecord(attestation) {
+  try {
+    const doc = {
+      attestation_id: attestation.attestation_id,
+      query: attestation.query,
+      timestamp: attestation.timestamp,
+      memories_retrieved: typeof attestation.memories_retrieved === 'string'
+        ? JSON.parse(attestation.memories_retrieved)
+        : attestation.memories_retrieved,
+      agent_id: attestation.agent_id || null,
+      session_id: attestation.session_id || null,
+      previous_hash: attestation.previous_hash || null
+    };
+
+    const dataToSign = JSON.stringify(doc);
+    const publicKey = getPublicKey();
+
+    // Verify signature
+    const isSignatureValid = crypto.verify(
+      null,
+      Buffer.from(dataToSign),
+      {
+        key: publicKey,
+        type: 'spki',
+        format: 'pem'
+      },
+      Buffer.from(attestation.signature, 'hex')
+    );
+
+    if (!isSignatureValid) {
+      return { valid: false, error: 'Signature verification failed' };
+    }
+
+    // Verify hash integrity
+    const fullRecord = {
+      ...doc,
+      signature: attestation.signature
+    };
+    const computedHash = crypto.createHash('sha256').update(JSON.stringify(fullRecord)).digest('hex');
+
+    if (computedHash !== attestation.hash) {
+      return { valid: false, error: 'Attestation hash mismatch' };
+    }
+
+    return { valid: true };
+  } catch (err) {
+    return { valid: false, error: err.message };
+  }
+}
+
+/**
+ * Verifies signature and chain integrity.
+ */
+export function verifyChainIntegrity(attestationId) {
+  const att = getAttestationById(attestationId);
+  if (!att) {
+    return { valid: false, error: `Attestation not found: ${attestationId}` };
+  }
+
+  const selfVerify = verifyAttestationRecord(att);
+  if (!selfVerify.valid) {
+    return selfVerify;
+  }
+
+  // If there's a previous link, check it
+  if (att.previous_hash) {
+    const prevAtt = getAttestationByHash(att.previous_hash);
+    if (!prevAtt) {
+      return { valid: false, error: `Broken chain: Previous attestation with hash ${att.previous_hash} not found` };
+    }
+
+    if (prevAtt.id >= att.id) {
+      return { valid: false, error: `Broken chain: Invalid sequence order` };
+    }
+
+    const prevVerify = verifyAttestationRecord(prevAtt);
+    if (!prevVerify.valid) {
+      return { valid: false, error: `Broken chain: Previous link is invalid: ${prevVerify.error}` };
+    }
+  }
+
+  return { valid: true, attestation: att };
+}
+
+/**
+ * Helper to fetch attestation by hash since it's not exposed globally.
+ */
+function getAttestationByHash(hash) {
+  return db.prepare('SELECT * FROM attestations WHERE hash = ?').get(hash) || null;
+}

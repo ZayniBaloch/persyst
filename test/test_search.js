@@ -84,4 +84,11 @@ test('Hybrid Search Engine', async (t) => {
     const results = await searchHybrid('User OR "drop table" *', 5);
     assert.ok(Array.isArray(results));
   });
+
+  await t.test('Threshold Filtering: weak semantic matches with no keyword overlap are filtered out', async () => {
+    // Search for something extremely unrelated that has no keyword overlap.
+    // "quantum computing cryptography" should not match any of our database entries
+    const results = await searchHybrid('quantum computing cryptography', 5);
+    assert.equal(results.length, 0, 'Unrelated results should be filtered out by similarity threshold');
+  });
 });

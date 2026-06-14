@@ -3,13 +3,14 @@ import assert from 'node:assert/strict';
 import db, {
   insertMemory,
   getMemoryById,
-  deleteMemoryFull,
+  deleteMemory,
   insertEntity,
   getEntityByName,
   insertEdge,
   getMemoriesByEntity,
   applyTemporalDecay,
-  closeDatabase
+  closeDatabase,
+  getMemoryByContent
 } from '../src/database.js';
 
 // Setup before tests
@@ -35,6 +36,17 @@ test('Database constraints and defaults', async (t) => {
     const id = insertMemory('Important memory', 0.8);
     const memory = getMemoryById(id);
     assert.equal(memory.importance_score, 0.8);
+  });
+
+  await t.test('getMemoryByContent finds memory by exact content', () => {
+    const content = 'Unique exact match check';
+    const id = insertMemory(content);
+    const found = getMemoryByContent(content);
+    assert.ok(found);
+    assert.equal(found.id, id);
+
+    const notFound = getMemoryByContent('Non-existent content');
+    assert.equal(notFound, null);
   });
 });
 
@@ -91,7 +103,7 @@ test('Knowledge Graph', async (t) => {
     assert.ok(contents.includes('Graph memory 2'));
   });
 
-  await t.test('deleteMemoryFull cleans up edges', () => {
+  await t.test('deleteMemory cleans up edges', () => {
     const memId = insertMemory('Memory to delete');
     const entityId = insertEntity('DeleteNode', 'concept');
 
@@ -102,7 +114,7 @@ test('Knowledge Graph', async (t) => {
     assert.equal(edges.length, 1);
 
     // Delete memory
-    const deleted = deleteMemoryFull(memId);
+    const deleted = deleteMemory(memId);
     assert.ok(deleted);
 
     // Edge should be gone

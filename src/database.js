@@ -5,6 +5,7 @@
  * - Opens SQLite connection at ~/.persyst/persyst.db
  * - Loads the sqlite-vec extension for vector search
  * - Creates all tables (memories, FTS5 index, vector index)
+ * - Runs schema migrations for production-grade bi-temporal model
  * - Exports simple CRUD functions for other modules to use
  * 
  * IMPORTANT: better-sqlite3 is SYNCHRONOUS. No async/await here.
@@ -18,7 +19,7 @@ import { mkdirSync } from 'fs';
 
 // ============================================================
 // DATABASE LOCATION
-// Store in ~/.persyst/ so data persists across sessions
+// Store in ~/.persyst/ per default to persist across sessions
 // ============================================================
 
 const DB_DIR = join(homedir(), '.persyst');
@@ -32,6 +33,7 @@ const DB_PATH = process.env.NODE_ENV === 'test' ? ':memory:' : join(DB_DIR, 'per
 const db = new Database(DB_PATH);
 db.pragma('journal_mode = WAL');   // Better performance for concurrent reads
 db.pragma('foreign_keys = ON');    // Enforce referential integrity
+db.pragma('mmap_size = 268435456'); // 256MB memory-mapped I/O for faster reads
 
 // Load sqlite-vec BEFORE creating any vec0 tables
 sqliteVec.load(db);
@@ -39,7 +41,7 @@ sqliteVec.load(db);
 console.error(`[persyst] Database: ${DB_PATH}`);
 
 // ============================================================
-// CREATE TABLES
+// CREATE TABLES & SCHEMA MIGRATIONS
 // ============================================================
 
 // --- Main memories table ---
@@ -50,7 +52,79 @@ db.exec(`
     importance_score REAL   DEFAULT 1.0,
     created_at      INTEGER DEFAULT (unixepoch()),
     last_accessed   INTEGER DEFAULT (unixepoch()),
-    access_count    INTEGER DEFAULT 0
+    access_count    INTEGER DEFAULT 0,
+    valid_from      INTEGER DEFAULT (unixepoch()),
+    valid_until     INTEGER DEFAULT NULL,
+    assertion_time  INTEGER DEFAULT (unixepoch())
+  )
+`);
+
+// --- Migrations for bi-temporal validity on existing tables ---
+try {
+  db.exec('ALTER TABLE memories ADD COLUMN valid_from INTEGER DEFAULT (unixepoch())');
+} catch (e) { /* Column already exists */ }
+
+try {
+  db.exec('ALTER TABLE memories ADD COLUMN valid_until INTEGER DEFAULT NULL');
+} catch (e) { /* Column already exists */ }
+
+try {
+  db.exec('ALTER TABLE memories ADD COLUMN assertion_time INTEGER DEFAULT (unixepoch())');
+} catch (e) { /* Column already exists */ }
+
+// --- Contradictions table ---
+db.exec(`
+  CREATE TABLE IF NOT EXISTS contradictions (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    old_memory_id     INTEGER NOT NULL,
+    new_memory_id     INTEGER NOT NULL,
+    resolved_at       INTEGER DEFAULT (unixepoch()),
+    resolution_reason TEXT
+  )
+`);
+
+// --- Provenance table ---
+db.exec(`
+  CREATE TABLE IF NOT EXISTS provenance (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    memory_id   INTEGER NOT NULL,
+    source_type TEXT NOT NULL, -- agent | git | manual | api
+    source_id   TEXT,          -- agent name or git hash
+    created_at  INTEGER DEFAULT (unixepoch()),
+    confidence  REAL NOT NULL
+  )
+`);
+
+// --- Agent Stats table ---
+db.exec(`
+  CREATE TABLE IF NOT EXISTS agent_stats (
+    agent_id              TEXT PRIMARY KEY,
+    memories_created      INTEGER DEFAULT 0,
+    memories_confirmed    INTEGER DEFAULT 0,
+    memories_contradicted INTEGER DEFAULT 0,
+    reputation_score      REAL DEFAULT 1.0,
+    last_active           INTEGER DEFAULT (unixepoch())
+  )
+`);
+
+// --- Migration: add domain column to agent_stats ---
+try {
+  db.exec('ALTER TABLE agent_stats ADD COLUMN domain TEXT DEFAULT "general"');
+} catch (e) { /* Column already exists */ }
+
+// --- Attestations table ---
+db.exec(`
+  CREATE TABLE IF NOT EXISTS attestations (
+    id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+    attestation_id     TEXT NOT NULL UNIQUE,
+    query              TEXT NOT NULL,
+    timestamp          TEXT NOT NULL,
+    memories_retrieved TEXT NOT NULL,
+    agent_id           TEXT,
+    session_id         TEXT,
+    signature          TEXT NOT NULL,
+    previous_hash      TEXT,
+    hash               TEXT NOT NULL
   )
 `);
 
@@ -64,9 +138,6 @@ db.exec(`
 `);
 
 // --- FTS5 auto-sync triggers ---
-// These keep the FTS index in sync when memories are added/updated/deleted.
-// Using try/catch because "CREATE TRIGGER IF NOT EXISTS" isn't supported.
-
 try {
   db.exec(`
     CREATE TRIGGER memories_fts_insert AFTER INSERT ON memories
@@ -106,7 +177,6 @@ db.exec(`
 `);
 
 // --- Knowledge Graph: entities + edges ---
-// Entities are the "nouns" — people, files, tech, concepts
 db.exec(`
   CREATE TABLE IF NOT EXISTS entities (
     id         INTEGER PRIMARY KEY,
@@ -116,7 +186,6 @@ db.exec(`
   )
 `);
 
-// Edges connect entities to memories (or entities to entities)
 db.exec(`
   CREATE TABLE IF NOT EXISTS edges (
     id          INTEGER PRIMARY KEY,
@@ -144,21 +213,70 @@ const stmts = {
   insertVec: db.prepare(
     'INSERT INTO memories_vec (rowid, embedding) VALUES (?, ?)'
   ),
+  insertProvenance: db.prepare(
+    'INSERT INTO provenance (memory_id, source_type, source_id, confidence) VALUES (?, ?, ?, ?)'
+  ),
+  insertContradiction: db.prepare(
+    'INSERT INTO contradictions (old_memory_id, new_memory_id, resolution_reason) VALUES (?, ?, ?)'
+  ),
+  upsertAgent: db.prepare(`
+    INSERT INTO agent_stats (agent_id) VALUES (?)
+    ON CONFLICT(agent_id) DO UPDATE SET last_active = unixepoch()
+  `),
+  incrementCreated: db.prepare(
+    'UPDATE agent_stats SET memories_created = memories_created + 1 WHERE agent_id = ?'
+  ),
+  incrementConfirmed: db.prepare(
+    'UPDATE agent_stats SET memories_confirmed = memories_confirmed + 1 WHERE agent_id = ?'
+  ),
+  incrementContradicted: db.prepare(
+    'UPDATE agent_stats SET memories_contradicted = memories_contradicted + 1 WHERE agent_id = ?'
+  ),
+  recalculateReputation: db.prepare(
+    'UPDATE agent_stats SET reputation_score = (memories_confirmed + 1.0) / (memories_contradicted + 1.0) WHERE agent_id = ?'
+  ),
+  insertAttestation: db.prepare(`
+    INSERT INTO attestations (
+      attestation_id, query, timestamp, memories_retrieved,
+      agent_id, session_id, signature, previous_hash, hash
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `),
 
   // -- Read --
   getById: db.prepare(
+    'SELECT * FROM memories WHERE id = ? AND valid_until IS NULL'
+  ),
+  getAnyById: db.prepare(
     'SELECT * FROM memories WHERE id = ?'
   ),
   getRecent: db.prepare(
-    'SELECT * FROM memories ORDER BY created_at DESC LIMIT ?'
+    'SELECT * FROM memories WHERE valid_until IS NULL ORDER BY created_at DESC LIMIT ?'
   ),
   getImportant: db.prepare(
-    'SELECT * FROM memories ORDER BY importance_score DESC LIMIT ?'
+    'SELECT * FROM memories WHERE valid_until IS NULL ORDER BY importance_score DESC LIMIT ?'
+  ),
+  getProvenance: db.prepare(
+    'SELECT * FROM provenance WHERE memory_id = ?'
+  ),
+  getAllAgentStats: db.prepare(
+    'SELECT * FROM agent_stats ORDER BY reputation_score DESC'
+  ),
+  getAttestation: db.prepare(
+    'SELECT * FROM attestations WHERE attestation_id = ?'
+  ),
+  getLastAttestation: db.prepare(
+    'SELECT * FROM attestations ORDER BY id DESC LIMIT 1'
+  ),
+  getAttestationsByDate: db.prepare(
+    'SELECT * FROM attestations WHERE timestamp >= ? AND timestamp <= ? ORDER BY id ASC'
   ),
 
   // -- Update --
   updateContent: db.prepare(
     'UPDATE memories SET content = ? WHERE id = ?'
+  ),
+  archiveMemory: db.prepare(
+    'UPDATE memories SET valid_until = unixepoch() WHERE id = ?'
   ),
 
   // -- Delete --
@@ -233,7 +351,25 @@ const stmts = {
 
   // -- Dedup --
   findMemoryByContent: db.prepare(
-    'SELECT id FROM memories WHERE content LIKE ? LIMIT 1'
+    'SELECT id FROM memories WHERE content = ? AND valid_until IS NULL LIMIT 1'
+  ),
+
+  // -- Hash-prefix lookup for git dedup (Bug 1 fix) --
+  findMemoryByHashPrefix: db.prepare(
+    'SELECT id FROM memories WHERE content LIKE ? AND valid_until IS NULL LIMIT 1'
+  ),
+
+  // -- Active memory count --
+  getActiveMemoryCount: db.prepare(
+    'SELECT COUNT(*) as count FROM memories WHERE valid_until IS NULL'
+  ),
+
+  // -- Memory History Chain (Feature 6: prepared statements) --
+  getContradictionAncestors: db.prepare(
+    'SELECT old_memory_id FROM contradictions WHERE new_memory_id = ?'
+  ),
+  getContradictionDescendants: db.prepare(
+    'SELECT new_memory_id FROM contradictions WHERE old_memory_id = ?'
   )
 };
 
@@ -243,13 +379,26 @@ const stmts = {
 // ============================================================
 
 /**
- * Insert a new memory into the memories table.
- * FTS5 index is auto-updated via trigger.
+ * Insert a new memory into the memories table and log its provenance.
  * @returns {number} The new memory's ID
  */
-export function insertMemory(content, importance = 1.0) {
+export function insertMemory(content, importance = 1.0, provenanceInfo = null) {
   const result = stmts.insertMemory.run(content, importance);
-  return Number(result.lastInsertRowid);
+  const id = Number(result.lastInsertRowid);
+
+  // Provenance Info handling
+  const source_type = provenanceInfo?.source_type || 'manual';
+  const source_id = provenanceInfo?.source_id || null;
+  const confidence = provenanceInfo?.confidence !== undefined ? provenanceInfo.confidence : 1.0;
+
+  stmts.insertProvenance.run(id, source_type, source_id, confidence);
+
+  // Agent Stats handling
+  if (source_type === 'agent' && source_id) {
+    incrementAgentStat(source_id, 'created');
+  }
+
+  return id;
 }
 
 /**
@@ -258,7 +407,6 @@ export function insertMemory(content, importance = 1.0) {
  * @param {Float32Array} embedding - 384-dim embedding vector
  */
 export function insertVector(id, embedding) {
-  // better-sqlite3 needs Buffer, sqlite-vec needs BigInt for rowid
   stmts.insertVec.run(BigInt(id), Buffer.from(embedding.buffer));
 }
 
@@ -268,7 +416,24 @@ export function insertVector(id, embedding) {
  */
 export function getMemory(id) {
   const memory = stmts.getById.get(id);
-  if (memory) boostMemory(id);
+  if (memory) {
+    boostMemory(id);
+    // Fetch and link provenance info
+    const prov = getProvenance(id);
+    memory.provenance = prov;
+  }
+  return memory || null;
+}
+
+/**
+ * Get a memory by ID WITHOUT boosting or checking bi-temporal validity.
+ * @returns {object|null} The memory row, or null if not found
+ */
+export function getAnyMemoryById(id) {
+  const memory = stmts.getAnyById.get(id);
+  if (memory) {
+    memory.provenance = getProvenance(id);
+  }
   return memory || null;
 }
 
@@ -277,7 +442,11 @@ export function getMemory(id) {
  * @returns {object|null} The memory row, or null if not found
  */
 export function getMemoryById(id) {
-  return stmts.getById.get(id) || null;
+  const memory = stmts.getById.get(id);
+  if (memory) {
+    memory.provenance = getProvenance(id);
+  }
+  return memory || null;
 }
 
 /**
@@ -298,11 +467,12 @@ export function deleteVec(id) {
 }
 
 /**
- * Delete a memory and its vector embedding.
+ * Delete a memory, its vector embedding, and all associated graph edges.
  * FTS5 index auto-updates via trigger.
  * @returns {boolean} true if the memory existed and was deleted
  */
 export function deleteMemory(id) {
+  stmts.deleteEdgesByMemory.run(id, id);
   deleteVec(id);  // Remove vector first (no cascades on virtual tables)
   const result = stmts.deleteMemory.run(id);
   return result.changes > 0;
@@ -312,14 +482,22 @@ export function deleteMemory(id) {
  * Get the N most recently created memories.
  */
 export function getRecentMemories(limit = 10) {
-  return stmts.getRecent.all(limit);
+  const rows = stmts.getRecent.all(limit);
+  rows.forEach(r => {
+    r.provenance = getProvenance(r.id);
+  });
+  return rows;
 }
 
 /**
  * Get the N most important memories (by importance_score).
  */
 export function getImportantMemories(limit = 10) {
-  return stmts.getImportant.all(limit);
+  const rows = stmts.getImportant.all(limit);
+  rows.forEach(r => {
+    r.provenance = getProvenance(r.id);
+  });
+  return rows;
 }
 
 // ============================================================
@@ -379,7 +557,7 @@ export function searchVector(embedding, limit = 10) {
 // ============================================================
 
 /**
- * Create a named entity (person, tech, file, concept, etc.).
+ * Create a named entity (person, tech, project, concept, file).
  * Silently skips if entity with that name already exists.
  * @returns {number|null} The entity ID, or null if already existed
  */
@@ -439,23 +617,181 @@ export function getMemoriesByEntity(entityId) {
 }
 
 /**
- * Check if a memory with similar content already exists.
- * Used for deduplication during git ingestion.
- * @param {string} pattern - SQL LIKE pattern to match
+ * Check if a memory with exact content already exists.
+ * Used for deduplication.
+ * @param {string} content - Exact content to match
  * @returns {boolean}
  */
-export function memoryExists(pattern) {
-  return stmts.findMemoryByContent.get(pattern) !== undefined;
+export function memoryExists(content) {
+  return stmts.findMemoryByContent.get(content) !== undefined;
 }
 
 /**
- * Delete a memory and clean up its edges.
+ * Check if a memory exists by hash prefix pattern (LIKE query).
+ * Used for git commit deduplication where we match `[hashPrefix]%`.
+ * @param {string} pattern - SQL LIKE pattern to match (e.g. '[abc1234]%')
+ * @returns {boolean}
  */
-export function deleteMemoryFull(id) {
-  stmts.deleteEdgesByMemory.run(id, id);
-  deleteVec(id);
-  const result = stmts.deleteMemory.run(id);
-  return result.changes > 0;
+export function memoryExistsByHashPrefix(pattern) {
+  return stmts.findMemoryByHashPrefix.get(pattern) !== undefined;
+}
+
+/**
+ * Get count of active (non-archived) memories.
+ * @returns {number}
+ */
+export function getActiveMemoryCount() {
+  return stmts.getActiveMemoryCount.get().count;
+}
+
+// ============================================================
+// DEDUPLICATION BY EXACT CONTENT
+// ============================================================
+
+/**
+ * Find memory by exact content.
+ * @param {string} content
+ * @returns {object|null} The memory row, or null if not found
+ */
+export function getMemoryByContent(content) {
+  const row = stmts.findMemoryByContent.get(content);
+  return row ? getMemoryById(row.id) : null;
+}
+
+// ============================================================
+// TEMPORAL CONTRADICTIONS & AGENT STATS & ATTESTATIONS CRUD
+// ============================================================
+
+/**
+ * Archive a memory and log the contradiction.
+ */
+export function logContradiction(oldMemoryId, newMemoryId, reason = '') {
+  stmts.archiveMemory.run(oldMemoryId);
+  stmts.insertContradiction.run(oldMemoryId, newMemoryId, reason);
+
+  // Track that the agent's memory was contradicted
+  const oldProvenance = getProvenance(oldMemoryId);
+  if (oldProvenance && oldProvenance.source_type === 'agent' && oldProvenance.source_id) {
+    incrementAgentStat(oldProvenance.source_id, 'contradicted');
+  }
+}
+
+/**
+ * Get provenance for a memory.
+ */
+export function getProvenance(memoryId) {
+  return stmts.getProvenance.get(memoryId) || null;
+}
+
+/**
+ * Update agent reputation counters.
+ */
+export function incrementAgentStat(agentId, action) {
+  stmts.upsertAgent.run(agentId);
+  if (action === 'created') {
+    stmts.incrementCreated.run(agentId);
+  } else if (action === 'confirmed') {
+    stmts.incrementConfirmed.run(agentId);
+  } else if (action === 'contradicted') {
+    stmts.incrementContradicted.run(agentId);
+  }
+  stmts.recalculateReputation.run(agentId);
+}
+
+/**
+ * Get all agent stats.
+ */
+export function getAllAgentStats() {
+  return stmts.getAllAgentStats.all();
+}
+
+/**
+ * Upsert agent signature / record attestation in database.
+ */
+export function insertAttestation(att) {
+  stmts.insertAttestation.run(
+    att.attestation_id,
+    att.query,
+    att.timestamp,
+    JSON.stringify(att.memories_retrieved),
+    att.agent_id || null,
+    att.session_id || null,
+    att.signature,
+    att.previous_hash || null,
+    att.hash
+  );
+}
+
+/**
+ * Retrieve a specific attestation by ID.
+ */
+export function getAttestationById(attestationId) {
+  return stmts.getAttestation.get(attestationId) || null;
+}
+
+/**
+ * Retrieve the last attestation logged for chaining.
+ */
+export function getLastAttestation() {
+  return stmts.getLastAttestation.get() || null;
+}
+
+/**
+ * Retrieve attestations within a timestamp range.
+ */
+export function getAttestationsByDateRange(startDate, endDate) {
+  return stmts.getAttestationsByDate.all(startDate, endDate);
+}
+
+/**
+ * Traverses contradictions to get historical versions of a memory.
+ */
+export function getMemoryHistoryChain(memoryId) {
+  const versions = new Set();
+  const queue = [memoryId];
+
+  while (queue.length > 0) {
+    const currentId = queue.shift();
+    if (versions.has(currentId)) continue;
+    versions.add(currentId);
+
+    // Find ancestors (replaced by current) — using prepared statement
+    const ancestors = stmts.getContradictionAncestors.all(currentId);
+    ancestors.forEach(a => {
+      if (!versions.has(a.old_memory_id)) queue.push(a.old_memory_id);
+    });
+
+    // Find descendants (replaces current) — using prepared statement
+    const descendants = stmts.getContradictionDescendants.all(currentId);
+    descendants.forEach(d => {
+      if (!versions.has(d.new_memory_id)) queue.push(d.new_memory_id);
+    });
+  }
+
+  const ids = Array.from(versions);
+  if (ids.length === 0) return [];
+
+  const placeholders = ids.map(() => '?').join(',');
+  const rows = db.prepare(`
+    SELECT m.*, p.source_type, p.source_id, p.confidence 
+    FROM memories m
+    LEFT JOIN provenance p ON m.id = p.memory_id
+    WHERE m.id IN (${placeholders})
+    ORDER BY m.created_at ASC
+  `).all(...ids);
+
+  return rows;
+}
+
+/**
+ * Search all memories FTS (including archived memories).
+ */
+export function searchAllMemoriesFts(queryText, limit = 10) {
+  try {
+    return stmts.searchFts.all(queryText, limit);
+  } catch (e) {
+    return [];
+  }
 }
 
 // ============================================================

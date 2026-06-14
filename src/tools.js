@@ -1,24 +1,14 @@
 /**
  * tools.js — MCP Tool Definitions & Handlers
  * 
- * Defines all 11 tools that AI agents can call via MCP:
+ * Defines all 19 tools that AI agents can call via MCP.
  * 
- *   Core (MVP):
- *   1. add_memory             — Store a new memory
- *   2. search_memories        — Hybrid keyword + semantic search
- *   3. get_memory             — Get one memory by ID
- *   4. update_memory          — Update content (re-embeds automatically)
- *   5. delete_memory          — Remove a memory permanently
- *   6. get_recent_memories    — Latest N memories
- *   7. get_important_memories — Top N by importance
- * 
- *   Advanced (Phase 3):
- *   8. ingest_git_commits     — Import git history as memories
- *   9. add_entity             — Create a named entity
- *  10. link_entity_memory     — Connect entity ↔ memory
- *  11. search_by_entity       — Find memories linked to an entity
- * 
- * Uses Zod schemas for input validation (required by McpServer).
+ * v2.0 changes:
+ * - Bug 1: Uses memoryExistsByHashPrefix for git dedup
+ * - Bug 3: Exports cleanupWatchers for graceful shutdown
+ * - Bug 7 + Feature 4: Memory content size validation
+ * - Feature 1: Cache invalidation on write operations
+ * - Feature 2: Contradiction detection on add_memory
  */
 
 import { z } from 'zod';
@@ -37,56 +27,204 @@ import {
   insertEdge,
   getMemoriesByEntity,
   getAllEntities,
-  memoryExists
+  memoryExists,
+  memoryExistsByHashPrefix,
+  getMemoryByContent,
+  boostMemory,
+  logContradiction,
+  getAllAgentStats,
+  getAttestationsByDateRange,
+  getMemoryHistoryChain,
+  searchAllMemoriesFts,
+  getAnyMemoryById,
+  searchVector,
+  getMemoryById,
+  getActiveMemoryCount
 } from './database.js';
-import { searchHybrid } from './search.js';
+import { searchHybrid, getOptimizedContext, consolidateMemories } from './search.js';
 import { getRecentCommits } from './git.js';
+import { verifyChainIntegrity } from './attestation.js';
+import { searchCache } from './cache.js';
+
+// ============================================================
+// CONSTANTS
+// ============================================================
+
+/** Maximum allowed memory content length (50,000 characters) */
+const MAX_MEMORY_CONTENT_LENGTH = 50000;
+
+/** Minimum content length (must have actual content) */
+const MIN_MEMORY_CONTENT_LENGTH = 1;
+
+// ============================================================
+// WATCHER REGISTRY
+// ============================================================
+
+// In-memory registry of active git watchers
+const watchers = new Map();
+
+/**
+ * Clean up all active git watchers. Called during graceful shutdown.
+ * (Bug 3 fix: prevents memory leak from orphaned setInterval handles)
+ */
+export function cleanupWatchers() {
+  for (const [repoPath, intervalId] of watchers.entries()) {
+    clearInterval(intervalId);
+    console.error(`[persyst-watcher] Stopped watching: ${repoPath}`);
+  }
+  watchers.clear();
+}
+
+// ============================================================
+// VALIDATION HELPERS
+// ============================================================
+
+/**
+ * Validate memory content for size and emptiness.
+ * @param {string} content - The content to validate
+ * @returns {{ valid: boolean, error?: string }} Validation result
+ */
+function validateMemoryContent(content) {
+  if (!content || content.trim().length < MIN_MEMORY_CONTENT_LENGTH) {
+    return { valid: false, error: 'Memory content cannot be empty or whitespace-only.' };
+  }
+  if (content.length > MAX_MEMORY_CONTENT_LENGTH) {
+    return {
+      valid: false,
+      error: `Memory content exceeds maximum length of ${MAX_MEMORY_CONTENT_LENGTH} characters (got ${content.length}). Please split into smaller memories.`
+    };
+  }
+  return { valid: true };
+}
 
 /**
  * Register all MCP tools on the server.
  * @param {McpServer} server - The MCP server instance
+ * @returns {number} The total count of registered tools
  */
 export function registerTools(server) {
+  let count = 0;
+  const originalTool = server.tool.bind(server);
+  server.tool = (...args) => {
+    originalTool(...args);
+    count++;
+  };
 
-  // ========================================
+  // ============================================================
+  // CORE TOOLS
+  // ============================================================
+
   // 1. ADD MEMORY
-  // ========================================
   server.tool(
     'add_memory',
     'Store a new memory. It will be searchable by both keywords and meaning.',
     {
       content: z.string().describe('The memory content to store'),
-      importance: z.number().min(0).max(1).default(1.0)
-        .describe('Importance score from 0 (low) to 1 (high)')
+      importance: z.number().min(0).max(1).default(1.0).describe('Importance score from 0 (low) to 1 (high)'),
+      agent_id: z.string().optional().describe('Agent ID for provenance tracking'),
+      session_id: z.string().optional().describe('Session ID')
     },
-    async ({ content, importance }) => {
-      const id = insertMemory(content, importance);
-      const embedding = await generateEmbedding(content);
-      insertVector(id, embedding);
+    async ({ content, importance, agent_id, session_id }) => {
+      try {
+        // Bug 7 + Feature 4: Validate content size
+        const validation = validateMemoryContent(content);
+        if (!validation.valid) {
+          return text({ error: validation.error });
+        }
 
-      return text({ success: true, id, message: `Memory #${id} stored` });
+        // Deduplication check
+        const existing = getMemoryByContent(content);
+        if (existing) {
+          boostMemory(existing.id);
+          return text({
+            success: true,
+            id: existing.id,
+            message: `Memory #${existing.id} already exists. Boosted importance.`
+          });
+        }
+
+        const id = insertMemory(content, importance, {
+          source_type: agent_id ? 'agent' : 'manual',
+          source_id: agent_id || null,
+          confidence: 1.0
+        });
+
+        const embedding = await generateEmbedding(content);
+        insertVector(id, embedding);
+
+        // Feature 1: Invalidate search cache on write
+        searchCache.invalidate();
+
+        // Feature 2: Contradiction Detection
+        let contradictions = [];
+        try {
+          const similarHits = searchVector(embedding, 3);
+          for (const hit of similarHits) {
+            const hitId = Number(hit.rowid);
+            if (hitId === id) continue; // Skip self
+
+            const sim = Math.max(0, 1 - (hit.distance * hit.distance) / 2);
+            if (sim > 0.75) {
+              const existingMemory = getMemoryById(hitId);
+              if (!existingMemory) continue;
+
+              // Check if content is substantially different (Jaccard distance > 0.5)
+              const jaccard = jaccardDistance(content, existingMemory.content);
+              if (jaccard > 0.5) {
+                // This is a contradiction: similar topic, different content
+                logContradiction(hitId, id, `Auto-detected contradiction (similarity: ${sim.toFixed(3)}, content_diff: ${jaccard.toFixed(3)})`);
+                contradictions.push({
+                  old_memory_id: hitId,
+                  old_content_preview: existingMemory.content.slice(0, 100),
+                  similarity: sim.toFixed(4),
+                  content_difference: jaccard.toFixed(4)
+                });
+              }
+            }
+          }
+        } catch (e) {
+          // Contradiction detection is best-effort, don't fail the memory insertion
+          console.error(`[persyst] Contradiction detection error: ${e.message}`);
+        }
+
+        const result = { success: true, id, message: `Memory #${id} stored` };
+        if (contradictions.length > 0) {
+          result.contradictions_detected = contradictions;
+          result.message += `. Detected ${contradictions.length} contradiction(s) — older memories archived.`;
+        }
+
+        return text(result);
+      } catch (err) {
+        return text({ error: err.message });
+      }
     }
   );
 
-  // ========================================
   // 2. SEARCH MEMORIES
-  // ========================================
   server.tool(
     'search_memories',
-    'Search memories using hybrid keyword + semantic search. Finds exact matches AND similar meanings (e.g. "dark mode" finds "night theme").',
+    'Search memories using hybrid keyword + semantic search with cryptographic attestation.',
     {
       query: z.string().describe('What to search for'),
-      limit: z.number().default(5).describe('Max results (default: 5)')
+      limit: z.number().default(5).describe('Max results (default: 5)'),
+      agent_id: z.string().optional().describe('Agent ID calling this search'),
+      session_id: z.string().optional().describe('Session ID')
     },
-    async ({ query, limit }) => {
-      const results = await searchHybrid(query, limit);
-      return text({ results, count: results.length });
+    async ({ query, limit, agent_id, session_id }) => {
+      try {
+        const results = await searchHybrid(query, limit, agent_id, session_id);
+        return text({
+          results,
+          count: results.length,
+          attestation: results.attestation
+        });
+      } catch (err) {
+        return text({ error: err.message });
+      }
     }
   );
 
-  // ========================================
   // 3. GET MEMORY
-  // ========================================
   server.tool(
     'get_memory',
     'Get a specific memory by its ID. Boosts its importance automatically.',
@@ -94,38 +232,64 @@ export function registerTools(server) {
       id: z.number().describe('Memory ID to retrieve')
     },
     async ({ id }) => {
-      const memory = getMemory(id);
-      if (!memory) return text({ error: `Memory #${id} not found` });
-      return text(memory);
+      try {
+        const memory = getMemory(id);
+        if (!memory) return text({ error: `Memory #${id} not found` });
+        return text(memory);
+      } catch (err) {
+        return text({ error: err.message });
+      }
     }
   );
 
-  // ========================================
   // 4. UPDATE MEMORY
-  // ========================================
   server.tool(
     'update_memory',
-    'Update the content of an existing memory. Automatically re-generates the search embedding.',
+    'Update the content of an existing memory. Archives the old content and saves the new version.',
     {
       id: z.number().describe('Memory ID to update'),
-      content: z.string().describe('New memory content')
+      content: z.string().describe('New memory content'),
+      agent_id: z.string().optional().describe('Agent ID making this update')
     },
-    async ({ id, content }) => {
-      const updated = updateMemoryContent(id, content);
-      if (!updated) return text({ error: `Memory #${id} not found` });
+    async ({ id, content, agent_id }) => {
+      try {
+        // Bug 7 + Feature 4: Validate content size
+        const validation = validateMemoryContent(content);
+        if (!validation.valid) {
+          return text({ error: validation.error });
+        }
 
-      // Re-generate embedding for updated content
-      const embedding = await generateEmbedding(content);
-      deleteVec(id);
-      insertVector(id, embedding);
+        const oldMemory = getMemory(id);
+        if (!oldMemory) return text({ error: `Memory #${id} not found` });
 
-      return text({ success: true, id, message: `Memory #${id} updated` });
+        // Insert new version
+        const newId = insertMemory(content, oldMemory.importance_score, {
+          source_type: agent_id ? 'agent' : 'manual',
+          source_id: agent_id || null,
+          confidence: 1.0
+        });
+
+        const embedding = await generateEmbedding(content);
+        insertVector(newId, embedding);
+
+        // Record contradiction and archive the old one
+        logContradiction(id, newId, 'Content updated via update_memory');
+
+        // Feature 1: Invalidate search cache on write
+        searchCache.invalidate();
+
+        return text({
+          success: true,
+          id: newId,
+          message: `Memory #${id} updated. New version stored as #${newId}`
+        });
+      } catch (err) {
+        return text({ error: err.message });
+      }
     }
   );
 
-  // ========================================
   // 5. DELETE MEMORY
-  // ========================================
   server.tool(
     'delete_memory',
     'Permanently delete a memory by its ID.',
@@ -133,15 +297,21 @@ export function registerTools(server) {
       id: z.number().describe('Memory ID to delete')
     },
     async ({ id }) => {
-      const deleted = deleteMemory(id);
-      if (!deleted) return text({ error: `Memory #${id} not found` });
-      return text({ success: true, id, message: `Memory #${id} deleted` });
+      try {
+        const deleted = deleteMemory(id);
+        if (!deleted) return text({ error: `Memory #${id} not found` });
+
+        // Feature 1: Invalidate search cache on write
+        searchCache.invalidate();
+
+        return text({ success: true, id, message: `Memory #${id} deleted` });
+      } catch (err) {
+        return text({ error: err.message });
+      }
     }
   );
 
-  // ========================================
   // 6. GET RECENT MEMORIES
-  // ========================================
   server.tool(
     'get_recent_memories',
     'Get the most recently created memories, newest first.',
@@ -149,14 +319,16 @@ export function registerTools(server) {
       limit: z.number().default(10).describe('How many to return (default: 10)')
     },
     async ({ limit }) => {
-      const memories = getRecentMemories(limit);
-      return text({ memories, count: memories.length });
+      try {
+        const memories = getRecentMemories(limit);
+        return text({ memories, count: memories.length });
+      } catch (err) {
+        return text({ error: err.message });
+      }
     }
   );
 
-  // ========================================
   // 7. GET IMPORTANT MEMORIES
-  // ========================================
   server.tool(
     'get_important_memories',
     'Get memories ranked by importance score, highest first.',
@@ -164,48 +336,66 @@ export function registerTools(server) {
       limit: z.number().default(10).describe('How many to return (default: 10)')
     },
     async ({ limit }) => {
-      const memories = getImportantMemories(limit);
-      return text({ memories, count: memories.length });
+      try {
+        const memories = getImportantMemories(limit);
+        return text({ memories, count: memories.length });
+      } catch (err) {
+        return text({ error: err.message });
+      }
     }
   );
 
-  // ========================================
   // 8. INGEST GIT COMMITS
-  // ========================================
   server.tool(
     'ingest_git_commits',
-    'Import recent git commits from a repository as memories. Each commit becomes a searchable memory. Deduplicates automatically — safe to call multiple times.',
+    'Import recent git commits, parse PR/file links, and categorize decisions.',
     {
       repo_path: z.string().describe('Absolute path to the git repository'),
       count: z.number().default(20).describe('Number of recent commits to import (default: 20)')
     },
     async ({ repo_path, count }) => {
       try {
-        const commits = getRecentCommits(repo_path, count);
+        const commits = await getRecentCommits(repo_path, count);
         let added = 0;
         let skipped = 0;
 
         for (const commit of commits) {
-          // Dedup by commit hash prefix
           const hashPrefix = commit.hash.slice(0, 7);
-          if (memoryExists(`[${hashPrefix}]%`)) {
+          // Bug 1 fix: use LIKE-based query for hash prefix matching
+          if (memoryExistsByHashPrefix(`[${hashPrefix}]%`)) {
             skipped++;
             continue;
           }
 
-          // Store commit as memory
-          const id = insertMemory(commit.fullText, 0.6);
+          // Insert memory with provenance
+          const id = insertMemory(commit.fullText, commit.importance, {
+            source_type: 'git',
+            source_id: commit.hash,
+            confidence: 0.8
+          });
+
           const embedding = await generateEmbedding(commit.fullText);
           insertVector(id, embedding);
 
-          // Auto-create author entity and link
+          // Link Author
           const authorId = insertEntity(commit.author, 'person');
           if (authorId) {
             insertEdge(authorId, id, 'authored', 'entity', 'memory');
           }
 
+          // Link Files Touched
+          for (const file of commit.files) {
+            const fileId = insertEntity(file, 'file');
+            if (fileId) {
+              insertEdge(fileId, id, 'touches', 'entity', 'memory');
+            }
+          }
+
           added++;
         }
+
+        // Feature 1: Invalidate search cache after git ingestion
+        if (added > 0) searchCache.invalidate();
 
         return text({
           success: true,
@@ -220,66 +410,269 @@ export function registerTools(server) {
     }
   );
 
-  // ========================================
   // 9. ADD ENTITY
-  // ========================================
   server.tool(
     'add_entity',
-    'Create a named entity (person, tech, project, concept, file). Entities can be linked to memories for graph traversal.',
+    'Create a named entity (person, tech, project, concept, file).',
     {
-      name: z.string().describe('Entity name (e.g. "React", "John", "auth-service")'),
+      name: z.string().describe('Entity name (e.g. "React", "auth-service")'),
       type: z.string().describe('Entity type: person, tech, project, concept, file')
     },
     async ({ name, type }) => {
-      const id = insertEntity(name, type);
-      return text({ success: true, id, name, type, message: `Entity "${name}" created` });
+      try {
+        const id = insertEntity(name, type);
+        return text({ success: true, id, name, type, message: `Entity "${name}" created` });
+      } catch (err) {
+        return text({ error: err.message });
+      }
     }
   );
 
-  // ========================================
   // 10. LINK ENTITY TO MEMORY
-  // ========================================
   server.tool(
     'link_entity_memory',
-    'Connect an entity to a memory with a relationship label (e.g. "mentions", "is_about", "decided_by").',
+    'Connect an entity to a memory with a relationship label.',
     {
       entity_name: z.string().describe('Name of the entity'),
       memory_id: z.number().describe('ID of the memory to link'),
-      relation: z.string().default('mentions').describe('Relationship type (e.g. mentions, is_about, decided_by)')
+      relation: z.string().default('mentions').describe('Relationship type')
     },
     async ({ entity_name, memory_id, relation }) => {
-      const entity = getEntityByName(entity_name);
-      if (!entity) return text({ error: `Entity "${entity_name}" not found. Create it first with add_entity.` });
+      try {
+        const entity = getEntityByName(entity_name);
+        if (!entity) return text({ error: `Entity "${entity_name}" not found.` });
 
-      const memory = getMemory(memory_id);
-      if (!memory) return text({ error: `Memory #${memory_id} not found` });
+        const memory = getMemory(memory_id);
+        if (!memory) return text({ error: `Memory #${memory_id} not found` });
 
-      insertEdge(entity.id, memory_id, relation, 'entity', 'memory');
-      return text({ success: true, entity: entity_name, memory_id, relation, message: `Linked "${entity_name}" → memory #${memory_id}` });
+        insertEdge(entity.id, memory_id, relation, 'entity', 'memory');
+        return text({ success: true, entity: entity_name, memory_id, relation });
+      } catch (err) {
+        return text({ error: err.message });
+      }
     }
   );
 
-  // ========================================
   // 11. SEARCH BY ENTITY
-  // ========================================
   server.tool(
     'search_by_entity',
-    'Find all memories linked to a specific entity. Returns memories connected via edges in the knowledge graph.',
+    'Find all memories linked to a specific entity.',
     {
       entity_name: z.string().describe('Name of the entity to search for')
     },
     async ({ entity_name }) => {
-      const entity = getEntityByName(entity_name);
-      if (!entity) return text({ error: `Entity "${entity_name}" not found` });
+      try {
+        const entity = getEntityByName(entity_name);
+        if (!entity) return text({ error: `Entity "${entity_name}" not found` });
 
-      const memories = getMemoriesByEntity(entity.id);
-      return text({ entity, memories, count: memories.length });
+        const memories = getMemoriesByEntity(entity.id);
+        return text({ entity, memories, count: memories.length });
+      } catch (err) {
+        return text({ error: err.message });
+      }
     }
   );
+
+  // ============================================================
+  // PRODUCTION-GRADE / NEW TOOLS
+  // ============================================================
+
+  // 12. GET MEMORY HISTORY
+  server.tool(
+    'get_memory_history',
+    'Retrieve all versions of a memory, including archived versions and contradictions.',
+    {
+      query: z.string().describe('The content or search query to find the memory versions for')
+    },
+    async ({ query }) => {
+      try {
+        const hits = searchAllMemoriesFts(query, 5);
+        if (hits.length === 0) {
+          return text({ message: 'No memories matching query found.' });
+        }
+
+        const histories = {};
+        for (const hit of hits) {
+          const chain = getMemoryHistoryChain(hit.id);
+          histories[hit.id] = chain;
+        }
+
+        return text({ query, histories });
+      } catch (err) {
+        return text({ error: err.message });
+      }
+    }
+  );
+
+  // 13. GET AGENT STATS
+  server.tool(
+    'get_agent_stats',
+    'Retrieve reputation statistics and activity logs for all active agents.',
+    {},
+    async () => {
+      try {
+        const stats = getAllAgentStats();
+        return text({ stats, count: stats.length });
+      } catch (err) {
+        return text({ error: err.message });
+      }
+    }
+  );
+
+  // 14. EXPORT AUDIT LOG
+  server.tool(
+    'export_audit_log',
+    'Exports query attestation log records within a timestamp range for compliance audits.',
+    {
+      start_date: z.string().describe('Start date ISO8601 (e.g. 2026-06-01T00:00:00Z)'),
+      end_date: z.string().describe('End date ISO8601')
+    },
+    async ({ start_date, end_date }) => {
+      try {
+        const logs = getAttestationsByDateRange(start_date, end_date);
+        return text({ logs, count: logs.length });
+      } catch (err) {
+        return text({ error: err.message });
+      }
+    }
+  );
+
+  // 15. VERIFY ATTESTATION
+  server.tool(
+    'verify_attestation',
+    'Verify the Ed25519 signature and hash-chain integrity of a specific attestation.',
+    {
+      attestation_id: z.string().describe('The UUID of the attestation to verify')
+    },
+    async ({ attestation_id }) => {
+      try {
+        const report = verifyChainIntegrity(attestation_id);
+        return text(report);
+      } catch (err) {
+        return text({ error: err.message });
+      }
+    }
+  );
+
+  // 16. GET FILE HISTORY
+  server.tool(
+    'get_file_history',
+    'Fetch all commit memories and architectural choices that modified a specific file.',
+    {
+      file_path: z.string().describe('Relative or absolute file path')
+    },
+    async ({ file_path }) => {
+      try {
+        const entity = getEntityByName(file_path);
+        if (!entity) return text({ message: `No git history entity found for file: ${file_path}`, memories: [] });
+
+        const memories = getMemoriesByEntity(entity.id);
+        return text({ file_path, memories, count: memories.length });
+      } catch (err) {
+        return text({ error: err.message });
+      }
+    }
+  );
+
+  // 17. WATCH GIT REPO
+  server.tool(
+    'watch_git_repo',
+    'Subscribe to and poll a repository for changes, auto-ingesting new commits every 5 minutes.',
+    {
+      repo_path: z.string().describe('Absolute path to the repository')
+    },
+    async ({ repo_path }) => {
+      try {
+        if (watchers.has(repo_path)) {
+          return text({ success: true, message: `Repository ${repo_path} is already being watched.` });
+        }
+
+        const intervalId = setInterval(async () => {
+          console.error(`[persyst-watcher] Running scheduled ingestion for: ${repo_path}`);
+          try {
+            const result = await getRecentCommits(repo_path, 10);
+            let added = 0;
+            for (const commit of result) {
+              const hashPrefix = commit.hash.slice(0, 7);
+              // Bug 1 fix: use LIKE-based query for hash prefix matching
+              if (memoryExistsByHashPrefix(`[${hashPrefix}]%`)) continue;
+
+              const id = insertMemory(commit.fullText, commit.importance, {
+                source_type: 'git',
+                source_id: commit.hash,
+                confidence: 0.8
+              });
+              const embedding = await generateEmbedding(commit.fullText);
+              insertVector(id, embedding);
+
+              const authorId = insertEntity(commit.author, 'person');
+              if (authorId) insertEdge(authorId, id, 'authored', 'entity', 'memory');
+
+              for (const file of commit.files) {
+                const fileId = insertEntity(file, 'file');
+                if (fileId) insertEdge(fileId, id, 'touches', 'entity', 'memory');
+              }
+              added++;
+            }
+            if (added > 0) {
+              searchCache.invalidate();
+              console.error(`[persyst-watcher] Ingested ${added} new commits from ${repo_path}`);
+            }
+          } catch (e) {
+            console.error(`[persyst-watcher] Ingestion failed for ${repo_path}: ${e.message}`);
+          }
+        }, 300000); // 5 minutes
+
+        watchers.set(repo_path, intervalId);
+        return text({ success: true, message: `Started watching repository at ${repo_path}` });
+      } catch (err) {
+        return text({ error: err.message });
+      }
+    }
+  );
+
+  // 18. GET OPTIMIZED CONTEXT
+  server.tool(
+    'get_optimized_context',
+    'Compile a condensed context prompt within a token budget by hopping the knowledge graph and ranking by temporal decay + agent reputation.',
+    {
+      query: z.string().describe('The search query context'),
+      max_tokens: z.number().default(4000).describe('Token budget for LLM context compression (default: 4000)'),
+      agent_id: z.string().optional().describe('Agent ID requesting context'),
+      session_id: z.string().optional().describe('Session ID')
+    },
+    async ({ query, max_tokens, agent_id, session_id }) => {
+      try {
+        const contextData = await getOptimizedContext(query, max_tokens, agent_id, session_id);
+        return text(contextData);
+      } catch (err) {
+        return text({ error: err.message });
+      }
+    }
+  );
+
+  // 19. CONSOLIDATE MEMORIES
+  server.tool(
+    'consolidate_memories',
+    'Manually trigger the semantic deduplication sweep to merge highly similar memories (similarity > 0.85).',
+    {},
+    async () => {
+      try {
+        const report = await consolidateMemories();
+        return text(report);
+      } catch (err) {
+        return text({ error: err.message });
+      }
+    }
+  );
+
+  // Restore original method and return count
+  server.tool = originalTool;
+  return count;
 }
 
 // ============================================================
-// HELPER
+// HELPERS
 // ============================================================
 
 /** Format a response as MCP text content */
@@ -287,4 +680,25 @@ function text(data) {
   return {
     content: [{ type: 'text', text: JSON.stringify(data, null, 2) }]
   };
+}
+
+/**
+ * Compute Jaccard distance between two text strings.
+ * Used for contradiction detection — higher distance means more different content.
+ * @param {string} a - First text
+ * @param {string} b - Second text
+ * @returns {number} Distance score between 0 (identical) and 1 (completely different)
+ */
+function jaccardDistance(a, b) {
+  const wordsA = new Set(a.toLowerCase().split(/\s+/));
+  const wordsB = new Set(b.toLowerCase().split(/\s+/));
+
+  let intersection = 0;
+  for (const word of wordsA) {
+    if (wordsB.has(word)) intersection++;
+  }
+
+  const union = wordsA.size + wordsB.size - intersection;
+  if (union === 0) return 0;
+  return 1 - (intersection / union);
 }

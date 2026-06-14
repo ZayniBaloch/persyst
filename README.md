@@ -2,7 +2,7 @@
 
 **Local-first MCP memory server for coding agents.**
 
-Persyst gives AI coding agents (Claude Code, Cursor, Aider, Windsurf) persistent memory across sessions. It stores memories in a local SQLite database with hybrid keyword + semantic search — no cloud, no API keys, works offline.
+Persyst gives AI coding agents (Claude Code, Cursor, VS Code, Aider, Windsurf, Antigravity) persistent memory across sessions. It stores memories in a local SQLite database with hybrid keyword + semantic search — no cloud, no API keys, works offline.
 
 ## How It Works
 
@@ -14,59 +14,96 @@ Your AI Agent ←→ MCP (stdio) ←→ Persyst ←→ SQLite (local)
 2. **Agent searches memories** → Persyst finds matches by both keywords AND meaning
 3. **"dark mode" ↔ "night theme"** → Semantic search understands synonyms
 
+> 🚨 **First-Run Note**: On the first start, Persyst will automatically download the local embedding model (`all-MiniLM-L6-v2` ~50MB). This can take 30-60 seconds depending on your connection. The server will log `Loading embedding model...` and then proceed normally.
+
+---
+
 ## Quick Start
 
-### 1. Install
+You don't need to install anything globally. You can run it instantly using `npx`:
 
-```bash
-npm install -g persyst-mcp
-```
+### 1. Add to Claude Code or Claude Desktop
 
-### 2. Add to Claude Code
-
-Edit your Claude Code MCP config (`claude_desktop_config.json`):
-
+#### Claude Code (CLI)
+Add this to your global configuration file located at `~/.claude.json`:
 ```json
 {
   "mcpServers": {
     "persyst": {
-      "command": "persyst-mcp"
+      "command": "npx",
+      "args": ["-y", "persyst-mcp"]
     }
   }
 }
 ```
 
-### 3. Use It
-
-In Claude Code, the agent can now call tools like:
-- `add_memory` — Store a fact
-- `search_memories` — Find relevant memories
-- `get_memory` — Get a specific memory
-- `update_memory` — Update a memory
-- `delete_memory` — Remove a memory
-- `get_recent_memories` — Latest memories
-- `get_important_memories` — Most important memories
-
-## Setup for Other Agents
-
-### Cursor
-
-Add to your Cursor MCP settings:
+#### Claude Desktop
+Add this to your Claude Desktop configuration file:
+* **macOS**: `~/Library/Application Support/Claude/claude_desktop_config.json`
+* **Windows**: `%APPDATA%\Claude\claude_desktop_config.json`
+* **Linux**: `~/.config/Claude/claude_desktop_config.json`
 
 ```json
 {
-  "persyst": {
-    "command": "persyst-mcp"
+  "mcpServers": {
+    "persyst": {
+      "command": "npx",
+      "args": ["-y", "persyst-mcp"]
+    }
   }
 }
 ```
 
-### Aider
+---
 
-```bash
-# Start the MCP server alongside Aider
-persyst-mcp &
+## Setup for Other Agents
+
+### VS Code (Cline / Roo Code)
+Add this configuration to your user settings under the MCP settings file (`cline_mcp_settings.json`):
+```json
+{
+  "mcpServers": {
+    "persyst": {
+      "command": "npx",
+      "args": ["-y", "persyst-mcp"]
+    }
+  }
+}
 ```
+
+### Cursor
+Add Persyst in Cursor under **Settings → Features → MCP**:
+1. Click **+ Add New MCP Server**
+2. Name: `persyst`
+3. Type: `stdio`
+4. Command: `npx -y persyst-mcp`
+
+### Aider
+Start Aider from the command line passing the server command:
+```bash
+aider --mcp-server persyst:npx -y persyst-mcp
+```
+Or append this to your `.aider.conf.yml` project file:
+```yaml
+mcp-server:
+  - name: persyst
+    command: npx -y persyst-mcp
+```
+
+### Antigravity
+Add Persyst to your Antigravity agent configuration file at `~/.gemini/antigravity/mcp_config.json`:
+```json
+{
+  "mcpServers": {
+    "persyst": {
+      "command": "npx",
+      "args": ["-y", "persyst-mcp"]
+    }
+  }
+}
+```
+
+---
 
 ## Available Tools
 
@@ -76,9 +113,11 @@ persyst-mcp &
 | `search_memories` | Hybrid keyword + semantic search | `query` (string), `limit` (number) |
 | `get_memory` | Get memory by ID | `id` (number) |
 | `update_memory` | Update memory content | `id` (number), `content` (string) |
-| `delete_memory` | Delete a memory | `id` (number) |
+| `delete_memory` | Delete a memory and clean up edges | `id` (number) |
 | `get_recent_memories` | Get latest memories | `limit` (number) |
 | `get_important_memories` | Get by importance score | `limit` (number) |
+
+---
 
 ## How Search Works
 
@@ -89,28 +128,7 @@ Persyst uses **hybrid search** — combining two strategies:
 
 Results from both are merged. Keyword matches get a score boost so exact matches rank higher, but semantic matches still surface related memories.
 
-## Architecture
-
-```
-persyst/
-├── index.js              ← Entry point (starts MCP server)
-├── src/
-│   ├── server.js         ← MCP server (stdio transport)
-│   ├── database.js       ← SQLite + schema + CRUD
-│   ├── search.js         ← Hybrid search engine
-│   ├── embeddings.js     ← Local embedding generation
-│   └── tools.js          ← 7 MCP tool definitions
-├── test/
-│   └── smoke.js          ← End-to-end test
-└── db/                   ← Database files (gitignored)
-```
-
-## Data Storage
-
-- Database location: `~/.persyst/persyst.db`
-- All data stays on your machine
-- No telemetry, no cloud calls, no API keys
-- Works offline (airplane mode ✓)
+---
 
 ## Tech Stack
 
@@ -121,21 +139,26 @@ persyst/
 - **Embeddings:** @huggingface/transformers + all-MiniLM-L6-v2 (384-dim, ~50MB)
 - **Protocol:** MCP over stdio
 
-## Development
+---
 
-```bash
-# Clone and install
-git clone <repo-url>
-cd persyst
-npm install
+## Troubleshooting
 
-# Run smoke test
-npm test
+#### `better-sqlite3` installation fails
+`better-sqlite3` compiles native C++ code on installation. Make sure you have python and C++ build tools installed on your system:
+* **Windows:** Run `npm install --global windows-build-tools` or install Visual Studio Build Tools.
+* **macOS/Linux:** Run `xcode-select --install` or install `build-essential`.
 
-# Start server directly
-node index.js
-```
+#### The agent is stuck or loading forever on startup
+This is normal on the **very first run** because Persyst is downloading the ~50MB embedding model. Wait 30-60 seconds for it to complete. The next runs will be instant.
+
+#### Command not found: `persyst-mcp`
+Instead of running it globally, prefer using the `npx -y persyst-mcp` command in your agent configurations. It automatically installs and updates the server non-interactively.
+
+#### Permission Denied
+Do not run `npx` with `sudo`. If you run into permission issues, ensure your npm global prefix is owned by your user account.
+
+---
 
 ## License
 
-MIT
+MIT License. See [LICENSE](LICENSE) for details.

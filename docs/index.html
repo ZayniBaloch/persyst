@@ -1,32 +1,36 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="light">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Persyst | Memory for AI Agents</title>
-  <meta name="description" content="A local-first, SQLite-based MCP memory server that gives coding agents persistent context across sessions.">
+  <title>Persyst | Local-first Memory for AI Coding Agents</title>
+  <meta name="description" content="A local-first, SQLite-based MCP memory server that gives coding agents persistent context across sessions. Zero cloud. Zero API keys.">
   
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <!-- Using Inter for a clean, professional look -->
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Lora:ital,wght@0,400..600;1,400&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
   
   <link rel="stylesheet" href="styles.css">
   
-  <!-- Feather Icons (Clean, professional SVGs) -->
+  <!-- Feather Icons -->
   <script src="https://unpkg.com/feather-icons"></script>
 </head>
 <body>
 
   <nav class="navbar">
     <div class="nav-container">
-      <div class="logo">
+      <a href="/" class="logo">
         <i data-feather="database" class="logo-icon"></i>
         <span>Persyst</span>
-      </div>
+      </a>
       <div class="nav-links">
         <a href="#features">Features</a>
+        <a href="#why-persyst">Why Persyst?</a>
         <a href="#integration">Integration</a>
+        <a href="#getting-started">Setup</a>
+        <button id="theme-toggle" class="btn-theme" aria-label="Toggle theme">
+          <i data-feather="moon" class="theme-icon"></i>
+        </button>
         <a href="https://github.com/ZayniBaloch/Peryst" target="_blank" class="btn-secondary">
           <i data-feather="github" class="icon-sm"></i> GitHub
         </a>
@@ -35,71 +39,173 @@
   </nav>
 
   <main>
+    <!-- Hero Section -->
     <section class="hero">
-      <div class="hero-content">
-        <div class="badge">v1.0.0 Now available on npm</div>
-        <h1>Context that persists.</h1>
+      <div class="container hero-content">
+        <div class="badge">v2.0.0 Now available on npm</div>
+        <h1>Context that <span>persists.</span></h1>
         <p class="subtitle">
-          A production-grade, local-first MCP memory layer. Equip your AI agents with hybrid semantic search, git ingestion, and a knowledge graph—all powered by SQLite.
+          A local-first memory server for coding agents. Remembers context across sessions with zero cloud dependencies.
         </p>
         
         <div class="cta-group">
           <div class="install-box">
             <span class="prompt">$</span>
-            <code id="npm-command">npx persyst-mcp</code>
+            <code id="npm-command">npx -y persyst-mcp</code>
             <button id="copy-btn" aria-label="Copy command">
               <i data-feather="copy" class="icon-sm"></i>
             </button>
           </div>
-          <a href="https://github.com/ZayniBaloch/Peryst#readme" class="btn-primary">View Documentation</a>
+          <div class="btn-row">
+            <a href="#getting-started" class="btn-primary">Get Started</a>
+            <a href="https://github.com/ZayniBaloch/Peryst" target="_blank" class="btn-outline">
+              <i data-feather="star" class="icon-sm"></i> Star on GitHub
+            </a>
+          </div>
+        </div>
+
+        <!-- Metrics Row -->
+        <div class="metrics">
+          <div class="metric-card">
+            <span class="metric-value">&lt;500ms</span>
+            <span class="metric-label">Memory Insertion</span>
+          </div>
+          <div class="metric-card">
+            <span class="metric-value">&lt;200ms</span>
+            <span class="metric-label">Search Speed</span>
+          </div>
+          <div class="metric-card">
+            <span class="metric-value">50MB</span>
+            <span class="metric-label">Model Size</span>
+          </div>
+          <div class="metric-card">
+            <span class="metric-value">0</span>
+            <span class="metric-label">API Calls</span>
+          </div>
         </div>
       </div>
     </section>
 
+    <!-- Features Section -->
     <section id="features" class="features-section">
       <div class="container">
-        <h2 class="section-title">Engineered for Autonomous Agents</h2>
+        <h2 class="section-title">Engineered for <span>AI Coding Agents</span></h2>
         <div class="features-grid">
           
           <div class="feature-card">
             <div class="feature-icon"><i data-feather="search"></i></div>
-            <h3>Hybrid Search Engine</h3>
-            <p>Combines FTS5 exact keyword matching with HuggingFace local semantic embeddings for perfect recall across memory banks.</p>
+            <h3>Hybrid Search</h3>
+            <p>Keyword search (FTS5) + semantic search (local embeddings) for perfect recall. "Dark mode" finds "night theme".</p>
           </div>
 
           <div class="feature-card">
-            <div class="feature-icon"><i data-feather="git-commit"></i></div>
-            <h3>Git History Ingestion</h3>
-            <p>Turn your entire repository history into a searchable memory bank. Agents can instantly retrieve historical technical decisions.</p>
-          </div>
-
-          <div class="feature-card">
-            <div class="feature-icon"><i data-feather="share-2"></i></div>
-            <h3>Knowledge Graph</h3>
-            <p>Built-in entity and edge tables allow agents to traverse relational connections between files, abstract concepts, and authors.</p>
+            <div class="feature-icon"><i data-feather="zap"></i></div>
+            <h3>Zero Config</h3>
+            <p>One command: <code>npx -y persyst-mcp</code>. Works with Claude Code, Cursor, Aider, and Windsurf instantly.</p>
           </div>
 
           <div class="feature-card">
             <div class="feature-icon"><i data-feather="shield"></i></div>
             <h3>Zero Egress. 100% Local.</h3>
-            <p>Operates entirely on your machine via SQLite and local transformer models. No cloud dependencies, no API keys required.</p>
+            <p>SQLite + local transformer models. No API keys. No cloud. Works offline. Passes the airplane test.</p>
+          </div>
+
+          <div class="feature-card">
+            <div class="feature-icon"><i data-feather="clock"></i></div>
+            <h3>Memory Lifecycle</h3>
+            <p>Auto-decay stale memories. Boost frequently accessed ones. Never pollute your agent's context window.</p>
+          </div>
+
+          <div class="feature-card">
+            <div class="feature-icon"><i data-feather="git-commit"></i></div>
+            <h3>Contradiction Detection</h3>
+            <p>Automatically detects conflicting facts during memory insertion. Auto-archives outdated information and constructs historical lineage chains.</p>
+          </div>
+
+          <div class="feature-card">
+            <div class="feature-icon"><i data-feather="shuffle"></i></div>
+            <h3>Maximal Marginal Relevance</h3>
+            <p>Reranks matches using MMR algorithms to promote diversity and penalize redundancy, keeping prompt contexts concise and clean.</p>
           </div>
 
         </div>
       </div>
     </section>
 
+    <!-- Comparison Section -->
+    <section id="why-persyst" class="why-persyst-section">
+      <div class="container">
+        <h2 class="section-title">Why choose <span>Persyst?</span></h2>
+        <div class="comparison-container">
+          <table class="comparison-table">
+            <thead>
+              <tr>
+                <th>Feature</th>
+                <th class="highlight">Persyst</th>
+                <th>Mem0 / Others</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><strong>Privacy & Egress</strong></td>
+                <td class="highlight-cell"><i data-feather="shield" class="check-inline"></i> 100% Local (Zero Egress)</td>
+                <td>Cloud dependency & third-party APIs</td>
+              </tr>
+              <tr>
+                <td><strong>Setup overhead</strong></td>
+                <td class="highlight-cell"><i data-feather="zap" class="check-inline"></i> One npx command</td>
+                <td>API key management & cloud DB setup</td>
+              </tr>
+              <tr>
+                <td><strong>Offline Mode</strong></td>
+                <td class="highlight-cell"><i data-feather="wifi-off" class="check-inline"></i> Works fully offline</td>
+                <td>Requires active internet connections</td>
+              </tr>
+              <tr>
+                <td><strong>Runtime</strong></td>
+                <td class="highlight-cell"><i data-feather="cpu" class="check-inline"></i> Node.js native</td>
+                <td>Heavy Python setups & daemon processes</td>
+              </tr>
+              <tr>
+                <td><strong>Vector DB</strong></td>
+                <td class="highlight-cell"><i data-feather="server" class="check-inline"></i> SQLite + sqlite-vec</td>
+                <td>External Qdrant/Pinecone</td>
+              </tr>
+              <tr>
+                <td><strong>Embeddings</strong></td>
+                <td class="highlight-cell"><i data-feather="layers" class="check-inline"></i> Local (50MB model)</td>
+                <td>OpenAI/Claude API calls</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- Tools & Terminal Integration Section -->
     <section id="integration" class="integration-section">
       <div class="container integration-layout">
         <div class="integration-text">
-          <h2>Seamless Integration</h2>
-          <p>Persyst implements the Model Context Protocol (MCP). Any compliant agent can immediately utilize its tools over standard stdio streams.</p>
-          <ul class="tool-list">
-            <li><i data-feather="check" class="check-icon"></i> <code>search_memories</code></li>
-            <li><i data-feather="check" class="check-icon"></i> <code>ingest_git_commits</code></li>
-            <li><i data-feather="check" class="check-icon"></i> <code>link_entity_memory</code></li>
-            <li><i data-feather="check" class="check-icon"></i> <code>get_important_memories</code></li>
-          </ul>
+          <h2>Standard MCP Tools</h2>
+          <p>Persyst implements the Model Context Protocol (MCP). Any compliant agent can use its tools over standard stdio streams. No custom integration needed.</p>
+          <div style="margin-top: 1.5rem;">
+            <h4 style="margin-bottom: 0.5rem; font-size: 1rem; font-weight: 600;">Core Memory Tools</h4>
+            <ul class="tool-list" style="margin-bottom: 1.5rem;">
+              <li><i data-feather="check" class="check-icon"></i> <code>add_memory</code></li>
+              <li><i data-feather="check" class="check-icon"></i> <code>search_memories</code></li>
+              <li><i data-feather="check" class="check-icon"></i> <code>get_memory</code></li>
+              <li><i data-feather="check" class="check-icon"></i> <code>update_memory</code></li>
+              <li><i data-feather="check" class="check-icon"></i> <code>delete_memory</code></li>
+            </ul>
+            <h4 style="margin-bottom: 0.5rem; font-size: 1rem; font-weight: 600;">Advanced &amp; Production Tools (v2.0)</h4>
+            <ul class="tool-list">
+              <li><i data-feather="zap" class="check-icon" style="color: var(--accent-terracotta);"></i> <code>get_optimized_context</code></li>
+              <li><i data-feather="zap" class="check-icon" style="color: var(--accent-terracotta);"></i> <code>get_memory_history</code></li>
+              <li><i data-feather="zap" class="check-icon" style="color: var(--accent-terracotta);"></i> <code>consolidate_memories</code></li>
+              <li><i data-feather="zap" class="check-icon" style="color: var(--accent-terracotta);"></i> <code>ingest_git_commits</code></li>
+              <li><i data-feather="zap" class="check-icon" style="color: var(--accent-terracotta);"></i> <code>get_file_history</code></li>
+            </ul>
+          </div>
         </div>
         
         <div class="code-window">
@@ -107,7 +213,7 @@
             <div class="window-controls">
               <span></span><span></span><span></span>
             </div>
-            <div class="window-title">aider --model claude-3.5-sonnet</div>
+            <div class="window-title">aider --model anthropic/claude-3-5-sonnet</div>
           </div>
           <div class="window-body">
             <div class="line"><span class="prompt">User></span> Why did we choose Postgres?</div>
@@ -116,6 +222,89 @@
             <div class="line"><span class="prompt">User></span> Remember to use Hooks for new components.</div>
             <div class="line system">System: Calling tool add_memory({"content":"Use Hooks for components"})</div>
             <div class="line agent"><span class="prompt">Agent></span> Stored in memory successfully.</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Setup instructions Section -->
+    <section id="getting-started" class="getting-started-section">
+      <div class="container">
+        <h2 class="section-title">Add to your <span>Agent Config</span></h2>
+        
+        <div class="tabs-container">
+          <div class="tabs-header">
+            <button class="tab-btn active" data-tab="tab-claude">Claude Code</button>
+            <button class="tab-btn" data-tab="tab-cursor">Cursor</button>
+            <button class="tab-btn" data-tab="tab-vscode">VS Code</button>
+            <button class="tab-btn" data-tab="tab-aider">Aider</button>
+            <button class="tab-btn" data-tab="tab-antigravity">Antigravity</button>
+          </div>
+          <div class="tabs-content">
+            <!-- Claude Code Pane -->
+            <div id="tab-claude" class="tab-pane active">
+              <p class="config-desc">Add this to your global Claude Code configuration file located at <code>~/.claude.json</code>:</p>
+              <pre><code>{
+  "mcpServers": {
+    "persyst": {
+      "command": "npx",
+      "args": ["-y", "persyst-mcp"]
+    }
+  }
+}</code></pre>
+              <div class="note">Restart Claude Code to load the server.</div>
+            </div>
+            <!-- Cursor Pane -->
+            <div id="tab-cursor" class="tab-pane">
+              <p class="config-desc">Add Persyst in Cursor under <strong>Settings > Features > MCP</strong>:</p>
+              <div class="config-steps">
+                <ol>
+                  <li>Click <strong>+ Add New MCP Server</strong></li>
+                  <li>Set Name to <code>persyst</code></li>
+                  <li>Set Type to <code>stdio</code></li>
+                  <li>Set Command to <code>npx -y persyst-mcp</code></li>
+                </ol>
+              </div>
+              <div class="note">Cursor will auto-detect available tools.</div>
+            </div>
+            <!-- VS Code Pane -->
+            <div id="tab-vscode" class="tab-pane">
+              <p class="config-desc">Use with extensions like <strong>Cline</strong> or <strong>Roo Code</strong>. Add to your configuration settings at <code>cline_mcp_settings.json</code>:</p>
+              <pre><code>{
+  "mcpServers": {
+    "persyst": {
+      "command": "npx",
+      "args": ["-y", "persyst-mcp"]
+    }
+  }
+}</code></pre>
+              <div class="note">VS Code will automatically spin up the server on editor start.</div>
+            </div>
+            <!-- Aider Pane -->
+            <div id="tab-aider" class="tab-pane">
+              <p class="config-desc">Start Aider with the MCP flag or append to your configuration file:</p>
+              <pre><code># Command Line
+aider --mcp-server persyst:npx -y persyst-mcp
+
+# Or in your .aider.conf.yml
+mcp-server:
+  - name: persyst
+    command: npx -y persyst-mcp</code></pre>
+              <div class="note">Aider will use Persyst for persistent memory.</div>
+            </div>
+            <!-- Antigravity Pane -->
+            <div id="tab-antigravity" class="tab-pane">
+              <p class="config-desc">Add Persyst to your Antigravity agent configuration file at <code>~/.gemini/antigravity/mcp_config.json</code>:</p>
+              <pre><code>{
+  "mcpServers": {
+    "persyst": {
+      "command": "npx",
+      "args": ["-y", "persyst-mcp"]
+    }
+  }
+}</code></pre>
+              <div class="note">Antigravity will load the tools during initialization.</div>
+            </div>
           </div>
         </div>
       </div>
@@ -129,11 +318,13 @@
         <span>Persyst</span>
       </div>
       <div class="footer-links">
-        <a href="https://www.npmjs.com/package/persyst-mcp">npm</a>
-        <a href="https://github.com/ZayniBaloch/Peryst">GitHub</a>
+        <a href="https://www.npmjs.com/package/persyst-mcp" target="_blank">npm</a>
+        <a href="https://github.com/ZayniBaloch/Peryst" target="_blank">GitHub</a>
+        <a href="https://github.com/ZayniBaloch/Peryst/blob/master/LICENSE" target="_blank">License</a>
+        <a href="https://github.com/ZayniBaloch/Peryst/issues" target="_blank">Issues</a>
       </div>
       <div class="footer-copy">
-        &copy; 2026 Zayn. MIT License.
+        Built with ❤️ by Zayn &middot; <a href="https://github.com/ZayniBaloch/Peryst/blob/master/LICENSE" target="_blank" class="footer-license-link">MIT License</a>
       </div>
     </div>
   </footer>

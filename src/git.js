@@ -1,37 +1,38 @@
 /**
- * git.js — Git Commit Ingestion
+ * git.js — Git Commit Ingestion & Analysis
  * 
  * Reads git log from a repository and converts commits into memories.
- * Useful for giving coding agents context about a project's history.
+ * Performs commit categorization, file diff analysis, and imports notes.
  * 
- * Each commit becomes a memory like:
- *   "[abc1234] Fix login bug — by John on 2024-01-15"
- * 
- * Deduplicates by commit hash so you can ingest safely multiple times.
+ * IMPORTANT: Uses async execFile instead of execSync to avoid blocking
+ * the Node.js event loop during git operations (Bug 4 fix).
  */
 
-import { execSync } from 'child_process';
+import { execFile } from 'child_process';
+import { promisify } from 'util';
+
+const execFileAsync = promisify(execFile);
 
 /**
  * Read the N most recent git commits from a repository.
  * 
  * @param {string} repoPath - Absolute path to the git repo
  * @param {number} count - Number of commits to read (default: 20)
- * @returns {Array<{hash: string, message: string, author: string, date: string, fullText: string}>}
+ * @returns {Promise<Array<{hash: string, message: string, author: string, date: string, fullText: string, files: string[], importance: number}>>}
  */
-export function getRecentCommits(repoPath, count = 20) {
+export async function getRecentCommits(repoPath, count = 20) {
   try {
     // Use a delimiter to split commits reliably
     const DELIM = '---PERSYST-COMMIT---';
     const format = `${DELIM}%n%H%n%an%n%ai%n%s%n%b`;
 
-    const output = execSync(
-      `git log -n ${count} --pretty=format:"${format}"`,
+    const { stdout: output } = await execFileAsync(
+      'git',
+      ['log', `-n`, `${count}`, `--pretty=format:${format}`],
       {
         cwd: repoPath,
         encoding: 'utf-8',
         timeout: 10000,      // 10s timeout
-        stdio: ['pipe', 'pipe', 'pipe']  // Suppress stderr
       }
     );
 
@@ -49,17 +50,37 @@ export function getRecentCommits(repoPath, count = 20) {
       const subject = lines[3].trim();
       const body = lines.slice(4).join(' ').trim();
 
+      // Fetch git notes if available (represents PR metadata)
+      const notes = await getGitNotes(repoPath, hash);
+
       // Build a readable memory string
-      const fullText = body
+      let fullText = body
         ? `[${hash.slice(0, 7)}] ${subject} — by ${author} on ${date}. ${body}`
         : `[${hash.slice(0, 7)}] ${subject} — by ${author} on ${date}`;
 
-      commits.push({ hash, message: subject, author, date, fullText });
+      if (notes) {
+        fullText += ` [PR Notes] ${notes}`;
+      }
+
+      // Fetch files touched
+      const files = await getCommitFiles(repoPath, hash);
+
+      // Classify importance based on message
+      const classification = classifyCommit(subject);
+
+      commits.push({
+        hash,
+        message: subject,
+        author,
+        date,
+        fullText,
+        files,
+        importance: classification.importance
+      });
     }
 
     return commits;
   } catch (err) {
-    // Not a git repo, or git not installed
     const message = err.message || String(err);
     if (message.includes('not a git repository')) {
       throw new Error(`Not a git repository: ${repoPath}`);
@@ -77,21 +98,67 @@ export function getRecentCommits(repoPath, count = 20) {
  * 
  * @param {string} repoPath - Absolute path to the git repo
  * @param {string} hash - Full commit hash
- * @returns {string[]} List of changed file paths
+ * @returns {Promise<string[]>} List of changed file paths
  */
-export function getCommitFiles(repoPath, hash) {
+export async function getCommitFiles(repoPath, hash) {
   try {
-    const output = execSync(
-      `git diff-tree --no-commit-id --name-only -r ${hash}`,
+    const { stdout: output } = await execFileAsync(
+      'git',
+      ['diff-tree', '--no-commit-id', '--name-only', '-r', hash],
       {
         cwd: repoPath,
         encoding: 'utf-8',
         timeout: 5000,
-        stdio: ['pipe', 'pipe', 'pipe']
       }
     );
     return output.trim().split('\n').filter(Boolean);
   } catch {
     return [];
   }
+}
+
+/**
+ * Fetch git notes (representing PR metadata or additional annotations).
+ */
+export async function getGitNotes(repoPath, hash) {
+  try {
+    const { stdout: output } = await execFileAsync(
+      'git',
+      ['notes', 'show', hash],
+      {
+        cwd: repoPath,
+        encoding: 'utf-8',
+        timeout: 3000,
+      }
+    );
+    return output.trim();
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * Categorize commit and assign importance.
+ */
+export function classifyCommit(subject) {
+  const s = subject.toLowerCase().trim();
+  if (
+    s.startsWith('feat:') ||
+    s.startsWith('fix:') ||
+    s.startsWith('refactor:') ||
+    s.startsWith('breaking:') ||
+    s.startsWith('decision:')
+  ) {
+    return { type: 'architectural', importance: 0.9 };
+  }
+  if (
+    s.startsWith('chore:') ||
+    s.startsWith('docs:') ||
+    s.startsWith('test:') ||
+    s.startsWith('style:') ||
+    s.startsWith('ci:')
+  ) {
+    return { type: 'chore', importance: 0.4 };
+  }
+  return { type: 'other', importance: 0.6 };
 }

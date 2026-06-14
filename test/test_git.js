@@ -35,8 +35,8 @@ test.after(() => {
 });
 
 test('Git Ingestion Module', async (t) => {
-  await t.test('Reads recent commits correctly', () => {
-    const commits = getRecentCommits(tempRepo, 10);
+  await t.test('Reads recent commits correctly', async () => {
+    const commits = await getRecentCommits(tempRepo, 10);
     
     assert.equal(commits.length, 2);
     
@@ -50,16 +50,16 @@ test('Git Ingestion Module', async (t) => {
     assert.equal(commits[1].message, 'Add file1');
   });
 
-  await t.test('Respects count limit', () => {
-    const commits = getRecentCommits(tempRepo, 1);
+  await t.test('Respects count limit', async () => {
+    const commits = await getRecentCommits(tempRepo, 1);
     assert.equal(commits.length, 1);
     assert.ok(commits[0].message.includes('Add file2'));
   });
 
-  await t.test('Throws meaningful error for non-git directory', () => {
+  await t.test('Throws meaningful error for non-git directory', async () => {
     const emptyDir = mkdtempSync(join(tmpdir(), 'persyst-empty-'));
-    assert.throws(() => {
-      getRecentCommits(emptyDir, 10);
+    await assert.rejects(async () => {
+      await getRecentCommits(emptyDir, 10);
     }, /Not a git repository|Failed to read git log/);
     
     rmSync(emptyDir, { recursive: true, force: true });

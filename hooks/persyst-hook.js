@@ -90,8 +90,11 @@ function readStdin() {
  * Uses StdioClientTransport to spawn and communicate with the server.
  */
 async function connectToPersyst() {
-  // Resolve the path to Persyst's index.js relative to this hook file
-  const persystPath = resolve(__dirname, '..', 'index.js');
+  // Resolve the path to Persyst's index.js
+  let persystPath = '{{PERSYST_INDEX_PATH}}';
+  if (persystPath.startsWith('{{')) {
+    persystPath = resolve(__dirname, '..', 'index.js');
+  }
 
   const transport = new StdioClientTransport({
     command: 'node',
@@ -185,7 +188,10 @@ function spawnWorker() {
   }
 
   try {
-    const workerPath = resolve(__dirname, '..', 'bin', 'extract-worker.js');
+    let workerPath = '{{PERSYST_WORKER_PATH}}';
+    if (workerPath.startsWith('{{')) {
+      workerPath = resolve(__dirname, '..', 'bin', 'extract-worker.js');
+    }
 
     const child = spawn('node', [workerPath], {
       detached: true,

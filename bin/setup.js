@@ -130,11 +130,16 @@ function run() {
     process.exit(1);
   }
 
-  // Step 2: Copy hook file to ~/.persyst/hooks/
-  console.log('  📁 Installing hook script...');
+  // Step 2: Copy and template hook file to ~/.persyst/hooks/
+  console.log('  📁 Installing and templating hook script...');
   ensureDir(PERSYST_HOOKS_DIR);
-  copyFileSync(HOOK_SOURCE, HOOK_DEST);
-  console.log(`     ✅ Copied to ${HOOK_DEST}`);
+  const INDEX_PATH = resolve(__dirname, '..', 'index.js');
+  const WORKER_PATH = resolve(__dirname, '..', 'bin', 'extract-worker.js');
+  let hookContent = readFileSync(HOOK_SOURCE, 'utf8');
+  hookContent = hookContent.replace('{{PERSYST_INDEX_PATH}}', INDEX_PATH.replace(/\\/g, '/'));
+  hookContent = hookContent.replace('{{PERSYST_WORKER_PATH}}', WORKER_PATH.replace(/\\/g, '/'));
+  writeFileSync(HOOK_DEST, hookContent, 'utf8');
+  console.log(`     ✅ Copied & templated to ${HOOK_DEST}`);
 
   // Step 3: Merge into ~/.claude/settings.json
   console.log('');

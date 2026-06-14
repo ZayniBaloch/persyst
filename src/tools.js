@@ -118,7 +118,7 @@ export function registerTools(server) {
   // 1. ADD MEMORY
   server.tool(
     'add_memory',
-    'Store a new memory. It will be searchable by both keywords and meaning. Use shared=true to make it visible to all agents.',
+    'Store a new memory. CRITICAL: Call this tool proactively to store important milestones, architectural decisions, and explicit user preferences. Always specify your agent name as agent_id to support namespace isolation.',
     {
       content: z.string().describe('The memory content to store'),
       importance: z.number().min(0).max(1).default(1.0).describe('Importance score from 0 (low) to 1 (high)'),
@@ -209,7 +209,7 @@ export function registerTools(server) {
   // 2. SEARCH MEMORIES
   server.tool(
     'search_memories',
-    'Search memories using hybrid keyword + semantic search with cryptographic attestation. Results are filtered by agent namespace.',
+    'Search memories using hybrid keyword + semantic search with cryptographic attestation. CRITICAL: Call this tool at the start of a session or task to retrieve relevant user preferences, coding guidelines, and past decisions.',
     {
       query: z.string().describe('What to search for'),
       limit: z.number().default(5).describe('Max results (default: 5)'),
@@ -647,7 +647,7 @@ export function registerTools(server) {
   // 18. GET OPTIMIZED CONTEXT
   server.tool(
     'get_optimized_context',
-    'Compile a condensed context prompt within a token budget by hopping the knowledge graph and ranking by temporal decay + agent reputation. Results filtered by agent namespace.',
+    'Compile a condensed context prompt within a token budget by hopping the knowledge graph and ranking by temporal decay + agent reputation. CRITICAL: Invoke this tool at the start of a task to load all relevant conventions and decisions.',
     {
       query: z.string().describe('The search query context'),
       max_tokens: z.number().default(4000).describe('Token budget for LLM context compression (default: 4000)'),

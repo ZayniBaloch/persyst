@@ -277,18 +277,20 @@
             </div>
             <!-- VS Code Pane -->
             <div id="tab-vscode" class="tab-pane">
-              <p class="config-desc"><strong>Option A: Visual Setup (Recommended)</strong></p>
-              <p class="config-desc">1. In Roo Code / Cline, click the <strong>+</strong> button to add a new MCP server.</p>
-              <p class="config-desc">2. Choose <strong>Command (stdio)</strong> and configure:</p>
+              <h4 style="margin-bottom: 0.75rem; font-size: 1.05rem; font-weight: 600; color: var(--text-primary);">VS Code Copilot Chat (Native Setup)</h4>
+              <p class="config-desc" style="margin-bottom: 0.75rem;">1. Open the Copilot Chat panel in VS Code.</p>
+              <p class="config-desc" style="margin-bottom: 0.75rem;">2. In the <strong>MCP Servers</strong> panel, click the <strong>+</strong> button.</p>
+              <p class="config-desc" style="margin-bottom: 0.75rem;">3. Select <strong>Command (stdio)</strong> and enter the configuration details:</p>
               <div class="config-steps" style="margin-bottom: 1.5rem;">
                 <ol style="margin-left: 1.5rem; color: var(--text-secondary); font-size: 0.95rem;">
-                  <li style="margin-bottom: 0.5rem;">Set Name to <code>persyst</code></li>
-                  <li style="margin-bottom: 0.5rem;">Set Command to <code>npx</code></li>
-                  <li style="margin-bottom: 0.5rem;">Set Arguments to <code>-y, persyst-mcp</code></li>
+                  <li style="margin-bottom: 0.5rem;">Name: <code>persyst</code></li>
+                  <li style="margin-bottom: 0.5rem;">Command: <code>npx</code> (or <code>persyst-mcp</code> if installed globally)</li>
+                  <li style="margin-bottom: 0.5rem;">Arguments: <code>-y, persyst-mcp</code> (or leave empty if global)</li>
                 </ol>
               </div>
-              <p class="config-desc"><strong>Option B: Manual JSON Config</strong></p>
-              <p class="config-desc">Add the server to your <code>cline_mcp_settings.json</code> settings file:</p>
+
+              <h4 style="margin-top: 2rem; margin-bottom: 0.75rem; font-size: 1.05rem; font-weight: 600; color: var(--text-primary);">Cline / Roo Code Extension</h4>
+              <p class="config-desc">Add the server configuration to your <code>cline_mcp_settings.json</code> settings file:</p>
               <pre><code>{
   "mcpServers": {
     "persyst": {
@@ -297,7 +299,8 @@
     }
   }
 }</code></pre>
-              <p class="config-desc" style="margin-top: 1.5rem;"><strong>3. Initialize Workspace Rules &amp; Swarm Settings:</strong></p>
+
+              <h4 style="margin-top: 2rem; margin-bottom: 0.75rem; font-size: 1.05rem; font-weight: 600; color: var(--text-primary);">3. Initialize Workspace Rules &amp; Swarm Settings:</h4>
               <pre><code>npx persyst-mcp init</code></pre>
               <p class="config-desc">This creates a <code>.persystrules.md</code> file that teaches your agent how to query and store memories. To enable <strong>agentic swarm isolation</strong>, instruct your agents to pass their unique agent name as <code>agent_id</code> and set <code>shared: false</code> for private memories.</p>
               <div class="note">VS Code will spin up the server, and the instructions will force the agent to use it proactively.</div>

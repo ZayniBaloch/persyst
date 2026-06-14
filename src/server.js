@@ -23,7 +23,7 @@ export async function startServer() {
   // --- Create MCP server ---
   const server = new McpServer({
     name: 'persyst',
-    version: '2.1.2'
+    version: '2.1.3'
   });
 
   // --- Register all tools ---

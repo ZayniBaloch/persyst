@@ -162,6 +162,7 @@ function enqueueJob(text, meta = {}) {
       text,
       session_id: meta.session_id || null,
       agent_id: meta.agent_id || 'claude-code',
+      namespace: meta.namespace || 'shared',
       cwd: meta.cwd || null,
       queued_at: new Date().toISOString(),
       _retries: 0

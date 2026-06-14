@@ -39,7 +39,8 @@ import {
   getAnyMemoryById,
   searchVector,
   getMemoryById,
-  getActiveMemoryCount
+  getActiveMemoryCount,
+  getNamespaceStats
 } from './database.js';
 import { searchHybrid, getOptimizedContext, consolidateMemories } from './search.js';
 import { getRecentCommits } from './git.js';
@@ -117,14 +118,15 @@ export function registerTools(server) {
   // 1. ADD MEMORY
   server.tool(
     'add_memory',
-    'Store a new memory. It will be searchable by both keywords and meaning.',
+    'Store a new memory. It will be searchable by both keywords and meaning. Use shared=true to make it visible to all agents.',
     {
       content: z.string().describe('The memory content to store'),
       importance: z.number().min(0).max(1).default(1.0).describe('Importance score from 0 (low) to 1 (high)'),
-      agent_id: z.string().optional().describe('Agent ID for provenance tracking'),
-      session_id: z.string().optional().describe('Session ID')
+      agent_id: z.string().optional().describe('Agent ID for provenance tracking and namespace isolation'),
+      session_id: z.string().optional().describe('Session ID'),
+      shared: z.boolean().default(true).describe('If true, memory is visible to all agents. If false, only visible to this agent.')
     },
-    async ({ content, importance, agent_id, session_id }) => {
+    async ({ content, importance, agent_id, session_id, shared }) => {
       try {
         // Bug 7 + Feature 4: Validate content size
         const validation = validateMemoryContent(content);
@@ -132,13 +134,17 @@ export function registerTools(server) {
           return text({ error: validation.error });
         }
 
-        // Deduplication check
-        const existing = getMemoryByContent(content);
+        // Derive namespace from agent_id and shared flag
+        const namespace = (shared || !agent_id) ? 'shared' : agent_id;
+
+        // Deduplication check (namespace-aware)
+        const existing = getMemoryByContent(content, namespace);
         if (existing) {
           boostMemory(existing.id);
           return text({
             success: true,
             id: existing.id,
+            namespace,
             message: `Memory #${existing.id} already exists. Boosted importance.`
           });
         }
@@ -147,7 +153,7 @@ export function registerTools(server) {
           source_type: agent_id ? 'agent' : 'manual',
           source_id: agent_id || null,
           confidence: 1.0
-        });
+        }, namespace);
 
         const embedding = await generateEmbedding(content);
         insertVector(id, embedding);
@@ -165,7 +171,7 @@ export function registerTools(server) {
 
             const sim = Math.max(0, 1 - (hit.distance * hit.distance) / 2);
             if (sim > 0.75) {
-              const existingMemory = getMemoryById(hitId);
+              const existingMemory = getMemoryById(hitId, namespace);
               if (!existingMemory) continue;
 
               // Check if content is substantially different (Jaccard distance > 0.5)
@@ -187,7 +193,7 @@ export function registerTools(server) {
           console.error(`[persyst] Contradiction detection error: ${e.message}`);
         }
 
-        const result = { success: true, id, message: `Memory #${id} stored` };
+        const result = { success: true, id, namespace, message: `Memory #${id} stored` };
         if (contradictions.length > 0) {
           result.contradictions_detected = contradictions;
           result.message += `. Detected ${contradictions.length} contradiction(s) — older memories archived.`;
@@ -203,19 +209,22 @@ export function registerTools(server) {
   // 2. SEARCH MEMORIES
   server.tool(
     'search_memories',
-    'Search memories using hybrid keyword + semantic search with cryptographic attestation.',
+    'Search memories using hybrid keyword + semantic search with cryptographic attestation. Results are filtered by agent namespace.',
     {
       query: z.string().describe('What to search for'),
       limit: z.number().default(5).describe('Max results (default: 5)'),
-      agent_id: z.string().optional().describe('Agent ID calling this search'),
+      agent_id: z.string().optional().describe('Agent ID — filters results to this agent\'s namespace + shared'),
       session_id: z.string().optional().describe('Session ID')
     },
     async ({ query, limit, agent_id, session_id }) => {
       try {
-        const results = await searchHybrid(query, limit, agent_id, session_id);
+        // Derive namespace from agent_id (null = search all)
+        const namespace = agent_id || null;
+        const results = await searchHybrid(query, limit, agent_id, session_id, namespace);
         return text({
           results,
           count: results.length,
+          namespace: namespace || 'all',
           attestation: results.attestation
         });
       } catch (err) {
@@ -314,14 +323,16 @@ export function registerTools(server) {
   // 6. GET RECENT MEMORIES
   server.tool(
     'get_recent_memories',
-    'Get the most recently created memories, newest first.',
+    'Get the most recently created memories, newest first. Filtered by agent namespace if agent_id is provided.',
     {
-      limit: z.number().default(10).describe('How many to return (default: 10)')
+      limit: z.number().default(10).describe('How many to return (default: 10)'),
+      agent_id: z.string().optional().describe('Agent ID — filters to this agent\'s namespace + shared')
     },
-    async ({ limit }) => {
+    async ({ limit, agent_id }) => {
       try {
-        const memories = getRecentMemories(limit);
-        return text({ memories, count: memories.length });
+        const namespace = agent_id || null;
+        const memories = getRecentMemories(limit, namespace);
+        return text({ memories, count: memories.length, namespace: namespace || 'all' });
       } catch (err) {
         return text({ error: err.message });
       }
@@ -331,14 +342,16 @@ export function registerTools(server) {
   // 7. GET IMPORTANT MEMORIES
   server.tool(
     'get_important_memories',
-    'Get memories ranked by importance score, highest first.',
+    'Get memories ranked by importance score, highest first. Filtered by agent namespace if agent_id is provided.',
     {
-      limit: z.number().default(10).describe('How many to return (default: 10)')
+      limit: z.number().default(10).describe('How many to return (default: 10)'),
+      agent_id: z.string().optional().describe('Agent ID — filters to this agent\'s namespace + shared')
     },
-    async ({ limit }) => {
+    async ({ limit, agent_id }) => {
       try {
-        const memories = getImportantMemories(limit);
-        return text({ memories, count: memories.length });
+        const namespace = agent_id || null;
+        const memories = getImportantMemories(limit, namespace);
+        return text({ memories, count: memories.length, namespace: namespace || 'all' });
       } catch (err) {
         return text({ error: err.message });
       }
@@ -634,16 +647,17 @@ export function registerTools(server) {
   // 18. GET OPTIMIZED CONTEXT
   server.tool(
     'get_optimized_context',
-    'Compile a condensed context prompt within a token budget by hopping the knowledge graph and ranking by temporal decay + agent reputation.',
+    'Compile a condensed context prompt within a token budget by hopping the knowledge graph and ranking by temporal decay + agent reputation. Results filtered by agent namespace.',
     {
       query: z.string().describe('The search query context'),
       max_tokens: z.number().default(4000).describe('Token budget for LLM context compression (default: 4000)'),
-      agent_id: z.string().optional().describe('Agent ID requesting context'),
+      agent_id: z.string().optional().describe('Agent ID requesting context — filters to this agent\'s namespace + shared'),
       session_id: z.string().optional().describe('Session ID')
     },
     async ({ query, max_tokens, agent_id, session_id }) => {
       try {
-        const contextData = await getOptimizedContext(query, max_tokens, agent_id, session_id);
+        const namespace = agent_id || null;
+        const contextData = await getOptimizedContext(query, max_tokens, agent_id, session_id, namespace);
         return text(contextData);
       } catch (err) {
         return text({ error: err.message });

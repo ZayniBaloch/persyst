@@ -31,7 +31,7 @@ let lastDataVersion = 0;
  * @param {string|null} sessionId - Session identifier
  * @returns {Promise<Array>} Ranked search results (with .attestation property attached)
  */
-export async function searchHybrid(queryText, limit = 5, agentId = null, sessionId = null) {
+export async function searchHybrid(queryText, limit = 5, agentId = null, sessionId = null, namespace = null) {
   // Sync in-memory cache with external DB changes using sqlite data_version
   try {
     const currentDataVersion = db.pragma('data_version', { simple: true });
@@ -44,7 +44,8 @@ export async function searchHybrid(queryText, limit = 5, agentId = null, session
   }
 
   // --- Check LRU cache first (Feature 1) ---
-  const cacheKey = LRUCache.key(queryText, limit);
+  // Include namespace in cache key to prevent cross-namespace cache hits
+  const cacheKey = LRUCache.key(`${namespace || 'all'}:${queryText}`, limit);
   const cached = searchCache.get(cacheKey);
   if (cached) {
     console.error(`[persyst-cache] Cache HIT for query: "${queryText.slice(0, 50)}..."`);
@@ -93,11 +94,12 @@ export async function searchHybrid(queryText, limit = 5, agentId = null, session
     }
   }
 
-  // --- Step 4: Fetch full details, apply reputation adjust, sort and return top N ---
+  // --- Step 4: Fetch full details, apply namespace filter, reputation adjust, sort and return top N ---
   const finalResults = combined
     .map(r => {
-      const memory = getMemoryById(r.id);
-      if (!memory) return null; // Memory was archived or deleted
+      // Use namespace-aware getMemoryById to filter by agent namespace
+      const memory = getMemoryById(r.id, namespace);
+      if (!memory) return null; // Memory was archived, deleted, or not in namespace
 
       // Boost memory access metrics
       boostMemory(r.id);
@@ -236,9 +238,9 @@ function jaccardSimilarity(a, b) {
  * @param {string|null} agentId - Querying agent identifier
  * @param {string|null} sessionId - Current session ID
  */
-export async function getOptimizedContext(queryText, maxTokens, agentId = null, sessionId = null) {
-  // 1. Run hybrid search to fetch top 20 memories
-  const searchHits = await searchHybrid(queryText, 20, agentId, sessionId);
+export async function getOptimizedContext(queryText, maxTokens, agentId = null, sessionId = null, namespace = null) {
+  // 1. Run hybrid search to fetch top 20 memories (namespace-aware)
+  const searchHits = await searchHybrid(queryText, 20, agentId, sessionId, namespace);
   const candidates = new Map();
 
   for (const hit of searchHits) {
@@ -356,8 +358,14 @@ export async function getOptimizedContext(queryText, maxTokens, agentId = null, 
  * Performs memory consolidation by merging highly similar memories.
  * Bug 6 fix: DB mutations are wrapped in a transaction for atomicity.
  */
-export async function consolidateMemories() {
-  const activeMemories = db.prepare('SELECT * FROM memories WHERE valid_until IS NULL').all();
+export async function consolidateMemories(namespace = null) {
+  // Only consolidate within namespace boundaries to prevent cross-agent merging
+  const query = namespace
+    ? "SELECT * FROM memories WHERE valid_until IS NULL AND (namespace = ? OR namespace = 'shared')"
+    : 'SELECT * FROM memories WHERE valid_until IS NULL';
+  const activeMemories = namespace
+    ? db.prepare(query).all(namespace)
+    : db.prepare(query).all();
   const consolidated = [];
   const visited = new Set();
 

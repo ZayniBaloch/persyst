@@ -372,7 +372,7 @@ async function main() {
               source_type: 'agent',
               source_id: data.agent_id || 'pamp-worker',
               confidence: fact.confidence
-            });
+            }, data.namespace || 'shared');
 
             // Generate and store embedding
             const embedding = await generateEmbedding(fact.content);

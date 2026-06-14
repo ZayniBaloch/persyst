@@ -72,6 +72,16 @@ try {
   db.exec('ALTER TABLE memories ADD COLUMN assertion_time INTEGER DEFAULT (unixepoch())');
 } catch (e) { /* Column already exists */ }
 
+// --- Migration: add namespace column for per-agent isolation ---
+try {
+  db.exec("ALTER TABLE memories ADD COLUMN namespace TEXT DEFAULT 'shared'");
+} catch (e) { /* Column already exists */ }
+
+// --- Index on namespace for fast filtered queries ---
+try {
+  db.exec('CREATE INDEX IF NOT EXISTS idx_memories_namespace ON memories (namespace)');
+} catch (e) { /* Index already exists */ }
+
 // --- Contradictions table ---
 db.exec(`
   CREATE TABLE IF NOT EXISTS contradictions (
@@ -208,7 +218,7 @@ console.error('[persyst] Schema initialized ✓');
 const stmts = {
   // -- Insert --
   insertMemory: db.prepare(
-    'INSERT INTO memories (content, importance_score) VALUES (?, ?)'
+    'INSERT INTO memories (content, importance_score, namespace) VALUES (?, ?, ?)'
   ),
   insertVec: db.prepare(
     'INSERT INTO memories_vec (rowid, embedding) VALUES (?, ?)'
@@ -246,14 +256,23 @@ const stmts = {
   getById: db.prepare(
     'SELECT * FROM memories WHERE id = ? AND valid_until IS NULL'
   ),
+  getByIdNs: db.prepare(
+    "SELECT * FROM memories WHERE id = ? AND (namespace = ? OR namespace = 'shared') AND valid_until IS NULL"
+  ),
   getAnyById: db.prepare(
     'SELECT * FROM memories WHERE id = ?'
   ),
   getRecent: db.prepare(
     'SELECT * FROM memories WHERE valid_until IS NULL ORDER BY created_at DESC LIMIT ?'
   ),
+  getRecentNs: db.prepare(
+    "SELECT * FROM memories WHERE (namespace = ? OR namespace = 'shared') AND valid_until IS NULL ORDER BY created_at DESC LIMIT ?"
+  ),
   getImportant: db.prepare(
     'SELECT * FROM memories WHERE valid_until IS NULL ORDER BY importance_score DESC LIMIT ?'
+  ),
+  getImportantNs: db.prepare(
+    "SELECT * FROM memories WHERE (namespace = ? OR namespace = 'shared') AND valid_until IS NULL ORDER BY importance_score DESC LIMIT ?"
   ),
   getProvenance: db.prepare(
     'SELECT * FROM provenance WHERE memory_id = ?'
@@ -353,6 +372,9 @@ const stmts = {
   findMemoryByContent: db.prepare(
     'SELECT id FROM memories WHERE content = ? AND valid_until IS NULL LIMIT 1'
   ),
+  findMemoryByContentNs: db.prepare(
+    "SELECT id FROM memories WHERE content = ? AND (namespace = ? OR namespace = 'shared') AND valid_until IS NULL LIMIT 1"
+  ),
 
   // -- Hash-prefix lookup for git dedup (Bug 1 fix) --
   findMemoryByHashPrefix: db.prepare(
@@ -362,6 +384,14 @@ const stmts = {
   // -- Active memory count --
   getActiveMemoryCount: db.prepare(
     'SELECT COUNT(*) as count FROM memories WHERE valid_until IS NULL'
+  ),
+  getActiveMemoryCountNs: db.prepare(
+    "SELECT COUNT(*) as count FROM memories WHERE (namespace = ? OR namespace = 'shared') AND valid_until IS NULL"
+  ),
+
+  // -- Namespace stats --
+  getNamespaceStats: db.prepare(
+    'SELECT namespace, COUNT(*) as count FROM memories WHERE valid_until IS NULL GROUP BY namespace ORDER BY count DESC'
   ),
 
   // -- Memory History Chain (Feature 6: prepared statements) --
@@ -380,10 +410,14 @@ const stmts = {
 
 /**
  * Insert a new memory into the memories table and log its provenance.
+ * @param {string} content - Memory content
+ * @param {number} importance - Importance score (0-1)
+ * @param {Object} provenanceInfo - Provenance metadata
+ * @param {string} namespace - Namespace for agent isolation (default: 'shared')
  * @returns {number} The new memory's ID
  */
-export function insertMemory(content, importance = 1.0, provenanceInfo = null) {
-  const result = stmts.insertMemory.run(content, importance);
+export function insertMemory(content, importance = 1.0, provenanceInfo = null, namespace = 'shared') {
+  const result = stmts.insertMemory.run(content, importance, namespace || 'shared');
   const id = Number(result.lastInsertRowid);
 
   // Provenance Info handling
@@ -412,13 +446,16 @@ export function insertVector(id, embedding) {
 
 /**
  * Get a memory by ID. Boosts its importance on access.
+ * @param {number} id - Memory ID
+ * @param {string|null} namespace - Namespace filter (null = no filter)
  * @returns {object|null} The memory row, or null if not found
  */
-export function getMemory(id) {
-  const memory = stmts.getById.get(id);
+export function getMemory(id, namespace = null) {
+  const memory = namespace
+    ? stmts.getByIdNs.get(id, namespace)
+    : stmts.getById.get(id);
   if (memory) {
     boostMemory(id);
-    // Fetch and link provenance info
     const prov = getProvenance(id);
     memory.provenance = prov;
   }
@@ -439,10 +476,14 @@ export function getAnyMemoryById(id) {
 
 /**
  * Get a memory by ID WITHOUT boosting. Used internally for search results.
+ * @param {number} id - Memory ID
+ * @param {string|null} namespace - Namespace filter (null = no filter)
  * @returns {object|null} The memory row, or null if not found
  */
-export function getMemoryById(id) {
-  const memory = stmts.getById.get(id);
+export function getMemoryById(id, namespace = null) {
+  const memory = namespace
+    ? stmts.getByIdNs.get(id, namespace)
+    : stmts.getById.get(id);
   if (memory) {
     memory.provenance = getProvenance(id);
   }
@@ -480,9 +521,13 @@ export function deleteMemory(id) {
 
 /**
  * Get the N most recently created memories.
+ * @param {number} limit - Max results
+ * @param {string|null} namespace - Namespace filter (null = all)
  */
-export function getRecentMemories(limit = 10) {
-  const rows = stmts.getRecent.all(limit);
+export function getRecentMemories(limit = 10, namespace = null) {
+  const rows = namespace
+    ? stmts.getRecentNs.all(namespace, limit)
+    : stmts.getRecent.all(limit);
   rows.forEach(r => {
     r.provenance = getProvenance(r.id);
   });
@@ -491,9 +536,13 @@ export function getRecentMemories(limit = 10) {
 
 /**
  * Get the N most important memories (by importance_score).
+ * @param {number} limit - Max results
+ * @param {string|null} namespace - Namespace filter (null = all)
  */
-export function getImportantMemories(limit = 10) {
-  const rows = stmts.getImportant.all(limit);
+export function getImportantMemories(limit = 10, namespace = null) {
+  const rows = namespace
+    ? stmts.getImportantNs.all(namespace, limit)
+    : stmts.getImportant.all(limit);
   rows.forEach(r => {
     r.provenance = getProvenance(r.id);
   });
@@ -620,9 +669,13 @@ export function getMemoriesByEntity(entityId) {
  * Check if a memory with exact content already exists.
  * Used for deduplication.
  * @param {string} content - Exact content to match
+ * @param {string|null} namespace - Namespace filter (null = global dedup)
  * @returns {boolean}
  */
-export function memoryExists(content) {
+export function memoryExists(content, namespace = null) {
+  if (namespace) {
+    return stmts.findMemoryByContentNs.get(content, namespace) !== undefined;
+  }
   return stmts.findMemoryByContent.get(content) !== undefined;
 }
 
@@ -638,10 +691,22 @@ export function memoryExistsByHashPrefix(pattern) {
 
 /**
  * Get count of active (non-archived) memories.
+ * @param {string|null} namespace - Namespace filter (null = all)
  * @returns {number}
  */
-export function getActiveMemoryCount() {
+export function getActiveMemoryCount(namespace = null) {
+  if (namespace) {
+    return stmts.getActiveMemoryCountNs.get(namespace).count;
+  }
   return stmts.getActiveMemoryCount.get().count;
+}
+
+/**
+ * Get namespace breakdown stats.
+ * @returns {Array<{namespace: string, count: number}>}
+ */
+export function getNamespaceStats() {
+  return stmts.getNamespaceStats.all();
 }
 
 // ============================================================
@@ -651,10 +716,13 @@ export function getActiveMemoryCount() {
 /**
  * Find memory by exact content.
  * @param {string} content
+ * @param {string|null} namespace - Namespace filter (null = global)
  * @returns {object|null} The memory row, or null if not found
  */
-export function getMemoryByContent(content) {
-  const row = stmts.findMemoryByContent.get(content);
+export function getMemoryByContent(content, namespace = null) {
+  const row = namespace
+    ? stmts.findMemoryByContentNs.get(content, namespace)
+    : stmts.findMemoryByContent.get(content);
   return row ? getMemoryById(row.id) : null;
 }
 

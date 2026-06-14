@@ -1,11 +1,14 @@
 {
   "name": "persyst-mcp",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "description": "Local-first MCP memory server with hybrid keyword + semantic search for coding agents",
   "type": "module",
   "main": "index.js",
   "bin": {
-    "persyst-mcp": "index.js"
+    "persyst-mcp": "index.js",
+    "persyst-setup": "bin/setup.js",
+    "persyst-aider": "bin/aider.js",
+    "persyst-init": "bin/init.js"
   },
   "engines": {
     "node": ">=18.0.0"
@@ -13,6 +16,8 @@
   "files": [
     "index.js",
     "src/",
+    "bin/",
+    "hooks/",
     "README.md",
     "LICENSE"
   ],

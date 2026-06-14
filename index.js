@@ -7,14 +7,30 @@
  * Starts the MCP server on stdio transport.
  * 
  * Usage:
- *   node index.js          (direct)
- *   npx persyst-mcp        (via npm)
+ *   node index.js          (direct — starts MCP server)
+ *   npx persyst-mcp        (via npm — starts MCP server)
+ *   npx persyst-mcp setup  (install Claude Code hooks)
  *   persyst-mcp            (if installed globally)
  */
 
-import { startServer } from './src/server.js';
+// Handle subcommands before starting the server
+const subcommand = process.argv[2];
 
-await startServer().catch(err => {
-  console.error('❌ Persyst failed to start:', err.message);
-  process.exit(1);
-});
+if (subcommand === 'setup') {
+  // Delegate to the setup CLI
+  await import('./bin/setup.js');
+} else if (subcommand === 'aider') {
+  // Shift 'aider' from process.argv so aider.js gets the correct arguments
+  process.argv.splice(2, 1);
+  await import('./bin/aider.js');
+} else if (subcommand === 'init') {
+  // Delegate to the rules init CLI
+  await import('./bin/init.js');
+} else {
+  // Default: start the MCP server
+  const { startServer } = await import('./src/server.js');
+  await startServer().catch(err => {
+    console.error('❌ Persyst failed to start:', err.message);
+    process.exit(1);
+  });
+}

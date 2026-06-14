@@ -42,7 +42,7 @@
     <!-- Hero Section -->
     <section class="hero">
       <div class="container hero-content">
-        <div class="badge">v2.0.0 Now available on npm</div>
+        <div class="badge">v2.1.0 Now available on npm</div>
         <h1>Context that <span>persists.</span></h1>
         <p class="subtitle">
           A local-first memory server for coding agents. Remembers context across sessions with zero cloud dependencies.
@@ -243,20 +243,14 @@
           <div class="tabs-content">
             <!-- Claude Code Pane -->
             <div id="tab-claude" class="tab-pane active">
-              <p class="config-desc">Add this to your global Claude Code configuration file located at <code>~/.claude.json</code>:</p>
-              <pre><code>{
-  "mcpServers": {
-    "persyst": {
-      "command": "npx",
-      "args": ["-y", "persyst-mcp"]
-    }
-  }
-}</code></pre>
-              <div class="note">Restart Claude Code to load the server.</div>
+              <p class="config-desc">Install automatic pre-prompt memory injection hooks with one command:</p>
+              <pre><code>npx persyst-mcp setup</code></pre>
+              <p class="config-desc" style="margin-top: 1rem;">This automatically copies the hook script and configures Claude Code's <code>~/.claude/settings.json</code> to load your memory on startup and search for context on every prompt.</p>
+              <div class="note">Alternatively, configure it manually as a standard MCP server in your <code>~/.claude.json</code>.</div>
             </div>
             <!-- Cursor Pane -->
             <div id="tab-cursor" class="tab-pane">
-              <p class="config-desc">Add Persyst in Cursor under <strong>Settings > Features > MCP</strong>:</p>
+              <p class="config-desc">1. Add the standard MCP server in Cursor under <strong>Settings > Features > MCP</strong>:</p>
               <div class="config-steps">
                 <ol>
                   <li>Click <strong>+ Add New MCP Server</strong></li>
@@ -265,11 +259,14 @@
                   <li>Set Command to <code>npx -y persyst-mcp</code></li>
                 </ol>
               </div>
-              <div class="note">Cursor will auto-detect available tools.</div>
+              <p class="config-desc" style="margin-top: 1rem;">2. Initialize automatic workspace memory rules:</p>
+              <pre><code>npx persyst-mcp init</code></pre>
+              <p class="config-desc">This creates a <code>.cursorrules</code> file that instructs the agent to automatically query memory on every query and record milestones.</p>
+              <div class="note">Cursor will auto-detect available tools and follow the rules.</div>
             </div>
             <!-- VS Code Pane -->
             <div id="tab-vscode" class="tab-pane">
-              <p class="config-desc">Use with extensions like <strong>Cline</strong> or <strong>Roo Code</strong>. Add to your configuration settings at <code>cline_mcp_settings.json</code>:</p>
+              <p class="config-desc">1. Add to your Cline/Roo Code configuration settings at <code>cline_mcp_settings.json</code>:</p>
               <pre><code>{
   "mcpServers": {
     "persyst": {
@@ -278,23 +275,21 @@
     }
   }
 }</code></pre>
-              <div class="note">VS Code will automatically spin up the server on editor start.</div>
+              <p class="config-desc" style="margin-top: 1rem;">2. Auto-generate system prompt instructions:</p>
+              <pre><code>npx persyst-mcp init</code></pre>
+              <p class="config-desc">This creates a <code>.persystrules.md</code> general guide with copy-pasteable custom system instructions for your agents.</p>
+              <div class="note">VS Code will spin up the server, and the instructions will force the agent to use it proactively.</div>
             </div>
             <!-- Aider Pane -->
             <div id="tab-aider" class="tab-pane">
-              <p class="config-desc">Start Aider with the MCP flag or append to your configuration file:</p>
-              <pre><code># Command Line
-aider --mcp-server persyst:npx -y persyst-mcp
-
-# Or in your .aider.conf.yml
-mcp-server:
-  - name: persyst
-    command: npx -y persyst-mcp</code></pre>
-              <div class="note">Aider will use Persyst for persistent memory.</div>
+              <p class="config-desc">Run Aider with the automatic memory-injection wrapper:</p>
+              <pre><code>npx persyst-mcp aider --model anthropic/claude-sonnet-4</code></pre>
+              <p class="config-desc" style="margin-top: 1rem;">This spawns Aider, automatically connects to Persyst, ingests git history, and injects relevant memories into your prompt inputs.</p>
+              <div class="note">Alternatively, run standard Aider with standard MCP: <code>aider --mcp-server persyst:npx -y persyst-mcp</code></div>
             </div>
             <!-- Antigravity Pane -->
             <div id="tab-antigravity" class="tab-pane">
-              <p class="config-desc">Add Persyst to your Antigravity agent configuration file at <code>~/.gemini/antigravity/mcp_config.json</code>:</p>
+              <p class="config-desc">1. Add Persyst to your Antigravity agent configuration file at <code>~/.gemini/antigravity/mcp_config.json</code>:</p>
               <pre><code>{
   "mcpServers": {
     "persyst": {
@@ -303,7 +298,9 @@ mcp-server:
     }
   }
 }</code></pre>
-              <div class="note">Antigravity will load the tools during initialization.</div>
+              <p class="config-desc" style="margin-top: 1rem;">2. Generate system rules files for the workspace:</p>
+              <pre><code>npx persyst-mcp init</code></pre>
+              <div class="note">Antigravity will load the tools during initialization and follow the workspace rules.</div>
             </div>
           </div>
         </div>

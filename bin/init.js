@@ -18,8 +18,12 @@
  *   - Localized: targets the current working directory (project root)
  */
 
-import { existsSync, readFileSync, writeFileSync } from 'fs';
-import { join } from 'path';
+import { existsSync, readFileSync, writeFileSync, mkdirSync, chmodSync } from 'fs';
+import { join, resolve, dirname } from 'path';
+import { fileURLToPath } from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
 
 // ============================================================
 // SYSTEM INSTRUCTION CONTENT
@@ -118,10 +122,39 @@ function run() {
   writeFileSync(generalGuidePath, GENERAL_GUIDE.trim() + '\n', 'utf8');
   console.log('     ✅ Created .persystrules.md (General Guide)');
 
-  // 4. Print Success & Configuration Help
+  // 4. Configure Git post-commit hook for automatic commit ingestion
+  const gitDir = join(cwd, '.git');
+  if (existsSync(gitDir)) {
+    const hooksDir = join(gitDir, 'hooks');
+    mkdirSync(hooksDir, { recursive: true });
+    const postCommitPath = join(hooksDir, 'post-commit');
+    const localPersystPath = resolve(__dirname, '..', 'index.js').replace(/\\/g, '/');
+
+    const hookContent = `#!/bin/sh
+# Persyst Git Commit Ingestion Hook
+# Automatically ingests recent commits into Persyst memory on every commit.
+
+# Local project path fallback for development
+LOCAL_PERSYST="${localPersystPath}"
+
+if [ -f "$LOCAL_PERSYST" ]; then
+  node "$LOCAL_PERSYST" ingest "$PWD" 5 >/dev/null 2>&1 || true
+else
+  npx persyst-mcp ingest "$PWD" 5 >/dev/null 2>&1 || true
+fi
+`;
+
+    writeFileSync(postCommitPath, hookContent, { mode: 0o755 });
+    try {
+      chmodSync(postCommitPath, 0o755);
+    } catch (_) {}
+    console.log('     ✅ Configured Git post-commit hook for auto-ingestion');
+  }
+
+  // 5. Print Success & Configuration Help
   console.log('');
   console.log('  ════════════════════════════════════');
-  console.log('  ✅ Rules initialization complete!');
+  console.log('  ✅ Rules and Git hooks initialization complete!');
   console.log('');
   console.log('  To connect the memory server to Cursor, Antigravity, or VS Code:');
   console.log('    1. Open your IDE Settings -> MCP (Model Context Protocol).');

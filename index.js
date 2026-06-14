@@ -10,6 +10,8 @@
  *   node index.js          (direct — starts MCP server)
  *   npx persyst-mcp        (via npm — starts MCP server)
  *   npx persyst-mcp setup  (install Claude Code hooks)
+ *   npx persyst-mcp init   (initialize workspace rules & git hooks)
+ *   npx persyst-mcp ingest (manually ingest git commits)
  *   persyst-mcp            (if installed globally)
  */
 
@@ -26,6 +28,9 @@ if (subcommand === 'setup') {
 } else if (subcommand === 'init') {
   // Delegate to the rules init CLI
   await import('./bin/init.js');
+} else if (subcommand === 'ingest') {
+  // Delegate to the git commit ingestion CLI
+  await import('./bin/ingest.js');
 } else {
   // Default: start the MCP server
   const { startServer } = await import('./src/server.js');

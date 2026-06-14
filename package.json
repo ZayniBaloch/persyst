@@ -8,7 +8,8 @@
     "persyst-mcp": "index.js",
     "persyst-setup": "bin/setup.js",
     "persyst-aider": "bin/aider.js",
-    "persyst-init": "bin/init.js"
+    "persyst-init": "bin/init.js",
+    "persyst-ingest": "bin/ingest.js"
   },
   "engines": {
     "node": ">=18.0.0"

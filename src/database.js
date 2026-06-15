@@ -208,6 +208,14 @@ db.exec(`
   )
 `);
 
+db.exec(`
+  CREATE TABLE IF NOT EXISTS watched_files (
+    file_path     TEXT PRIMARY KEY,
+    last_position INTEGER NOT NULL,
+    updated_at    INTEGER DEFAULT (unixepoch())
+  )
+`);
+
 console.error('[persyst] Schema initialized ✓');
 
 // ============================================================
@@ -400,7 +408,17 @@ const stmts = {
   ),
   getContradictionDescendants: db.prepare(
     'SELECT new_memory_id FROM contradictions WHERE old_memory_id = ?'
-  )
+  ),
+
+  // -- Watcher Offsets --
+  getWatchPosition: db.prepare(
+    'SELECT last_position FROM watched_files WHERE file_path = ?'
+  ),
+  upsertWatchPosition: db.prepare(`
+    INSERT INTO watched_files (file_path, last_position)
+    VALUES (?, ?)
+    ON CONFLICT(file_path) DO UPDATE SET last_position = excluded.last_position, updated_at = unixepoch()
+  `)
 };
 
 // ============================================================
@@ -860,6 +878,21 @@ export function searchAllMemoriesFts(queryText, limit = 10) {
   } catch (e) {
     return [];
   }
+}
+
+/**
+ * Retrieve the last read position of a watched file.
+ */
+export function getWatchPosition(filePath) {
+  const row = stmts.getWatchPosition.get(filePath);
+  return row ? row.last_position : 0;
+}
+
+/**
+ * Upsert the last read position of a watched file.
+ */
+export function upsertWatchPosition(filePath, position) {
+  stmts.upsertWatchPosition.run(filePath, position);
 }
 
 // ============================================================

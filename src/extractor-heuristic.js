@@ -136,7 +136,7 @@ function isNoiseLine(line) {
 }
 
 // ============================================================
-// FACT NORMALIZATION
+// FACT NORMALIZATION & COGNITIVE FILTER
 // ============================================================
 
 /**
@@ -153,6 +153,78 @@ function cleanFact(raw) {
     .replace(/[,;:]+$/, '')        // strip trailing punctuation
     .replace(/^["'`]+|["'`]+$/g, '') // strip quotes
     .slice(0, 200);                // hard max fact length
+}
+
+// List of programming/tech concepts to distinguish tech context from conversational filler
+const TECH_CONCEPTS = [
+  'mode', 'theme', 'config', 'stack', 'style', 'code', 'file', 'folder', 'path',
+  'api', 'endpoint', 'json', 'data', 'db', 'database', 'table', 'migration',
+  'schema', 'sql', 'query', 'url', 'port', 'host', 'env', 'environment',
+  'node', 'npm', 'git', 'react', 'vue', 'angular', 'svelte', 'next', 'express',
+  'postgres', 'sqlite', 'mongo', 'mysql', 'docker', 'ubuntu', 'linux', 'server',
+  'pipeline', 'ci', 'cd', 'github', 'actions', 'oauth', 'auth', 'security',
+  'token', 'key', 'credential', 'package', 'dependency', 'library', 'script',
+  'test', 'jest', 'vitest', 'eslint', 'prettier', 'tailwind', 'css', 'html',
+  'js', 'ts', 'typescript', 'javascript', 'eval', 'function', 'class', 'component',
+  'import', 'export', 'require', 'const', 'let', 'var', 'compiler', 'build',
+  'cli', 'command', 'terminal', 'mcp', 'server', 'client', 'persyst', 'memory'
+];
+
+/**
+ * Filter out conversational filler and keep only valid technical statements/preferences.
+ * @param {string} content - The extracted fact text
+ * @returns {boolean} - true if it is a valid, high-value fact
+ */
+function cognitiveNoiseFilter(content) {
+  const normalized = content.toLowerCase().trim();
+
+  // 1. Filter out interrogatives (questions)
+  const questionWords = ['how', 'why', 'what', 'where', 'when', 'who', 'can', 'could', 'would', 'is', 'are', 'should'];
+  if (normalized.endsWith('?')) return false;
+  for (const q of questionWords) {
+    if (normalized.startsWith(q + ' ') || normalized.includes(` ${q} `) || normalized.includes(`:${q} `)) {
+      if (normalized.includes(' ?') || normalized.endsWith('?')) return false;
+      if (/preference:\s+(?:can|could|would|is|are|how|why|what|where)\s/i.test(content)) return false;
+      if (/rule:\s+(?:can|could|would|is|are|how|why|what|where)\s/i.test(content)) return false;
+      if (/decision:\s+(?:can|could|would|is|are|how|why|what|where)\s/i.test(content)) return false;
+    }
+  }
+
+  // 2. Filter out transient pronouns/vague statements without enough context
+  if (/preference:\s+(?:this|that|it|these|those|us|me|them|him|her)\b/i.test(content)) return false;
+  if (/decision:\s+(?:this|that|it|these|those|us|me|them|him|her)\b/i.test(content)) return false;
+
+  // 3. Filter out transient time references indicating very short-term state
+  const transientTerms = ['today', 'tomorrow', 'yesterday', 'now', 'just', 'temporary', 'currently', 'for now', 'briefly', 'at the moment'];
+  for (const term of transientTerms) {
+    if (normalized.includes(` ${term} `) || normalized.endsWith(` ${term}`)) {
+      return false;
+    }
+  }
+
+  // 4. Filter out trace logs, build outputs, compile errors
+  if (normalized.includes('at ') && normalized.includes('.js:')) return false;
+  if (normalized.includes('error:') || normalized.includes('exception:')) return false;
+  if (normalized.includes('exit code') || normalized.includes('npm error')) return false;
+
+  // 5. Require at least one programming/project-related concept
+  const words = normalized.split(/[^a-zA-Z0-9\-\.\/]+/);
+  const hasTechTerm = words.some(w => {
+    return TECH_CONCEPTS.some(concept => {
+      if (concept.length <= 2) {
+        return w === concept;
+      }
+      return w.includes(concept);
+    }) ||
+    w.endsWith('.js') || w.endsWith('.json') || w.endsWith('.css') || w.endsWith('.md') ||
+    w.includes('/') || w.includes('\\');
+  });
+  
+  if (!hasTechTerm) {
+    return false;
+  }
+
+  return true;
 }
 
 // ============================================================
@@ -202,6 +274,8 @@ export function extractHeuristic(text, options = {}) {
       try {
         const content = pattern.template(match);
         if (!content || content.length < 5) continue;
+
+        if (!cognitiveNoiseFilter(content)) continue;
 
         // Normalize for dedup
         const key = content.toLowerCase().replace(/\s+/g, ' ').trim();

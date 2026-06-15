@@ -14,6 +14,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { registerTools, cleanupWatchers } from './tools.js';
 import { applyTemporalDecay, closeDatabase } from './database.js';
 import { consolidateMemories } from './search.js';
+import { startWatcher, stopWatcher } from './watcher.js';
 
 /**
  * Start the Persyst MCP server.
@@ -29,6 +30,9 @@ export async function startServer() {
   // --- Register all tools ---
   const registeredCount = registerTools(server);
   console.error(`[persyst] ${registeredCount} tools registered ✓`);
+
+  // --- Start background log watcher daemon ---
+  startWatcher();
 
   // --- Start temporal decay timer ---
   // Runs every hour: reduces importance of memories not accessed in 7+ days
@@ -51,6 +55,7 @@ export async function startServer() {
     console.error('[persyst] Shutting down...');
     clearInterval(decayTimer);
     clearInterval(consolidationTimer);
+    stopWatcher();      // Stop background log watcher
     cleanupWatchers();  // Bug 3 fix: stop all git repo watchers
     closeDatabase();
     process.exit(0);

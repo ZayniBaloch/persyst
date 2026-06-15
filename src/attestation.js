@@ -60,10 +60,16 @@ export function createAttestation(query, memories, agentId = null, sessionId = n
   // Map memories to {id, content_hash, score}
   const memoriesRetrieved = memories.map(m => {
     const contentHash = crypto.createHash('sha256').update(m.content).digest('hex');
+    let scoreVal = 0;
+    if (m.hybrid_score !== undefined && m.hybrid_score !== null) {
+      scoreVal = m.hybrid_score;
+    } else if (m.score !== undefined && m.score !== null) {
+      scoreVal = m.score;
+    }
     return {
       id: m.id,
       content_hash: contentHash,
-      score: parseFloat(m.hybrid_score || 0)
+      score: parseFloat(scoreVal)
     };
   });
 

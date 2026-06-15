@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { join } from 'path';
-import { writeFileSync, mkdirSync, rmSync, existsSync } from 'fs';
+import { writeFileSync, readFileSync, mkdirSync, rmSync, existsSync } from 'fs';
 import db, { closeDatabase, getMemoryById, getWatchPosition } from '../src/database.js';
 import { extractHeuristic } from '../src/extractor-heuristic.js';
 import { scanDirectories, loadWatchedDirs } from '../src/watcher.js';

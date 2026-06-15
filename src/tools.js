@@ -13,7 +13,7 @@
 
 import { z } from 'zod';
 import { generateEmbedding } from './embeddings.js';
-import {
+import db, {
   insertMemory,
   insertVector,
   getMemory,
@@ -32,6 +32,7 @@ import {
   getMemoryByContent,
   boostMemory,
   logContradiction,
+  getProvenance,
   getAllAgentStats,
   getAttestationsByDateRange,
   getMemoryHistoryChain,
@@ -51,8 +52,8 @@ import { searchCache } from './cache.js';
 // CONSTANTS
 // ============================================================
 
-/** Maximum allowed memory content length (50,000 characters) */
-const MAX_MEMORY_CONTENT_LENGTH = 50000;
+/** Maximum allowed memory content length (10,000 characters) */
+const MAX_MEMORY_CONTENT_LENGTH = 10000;
 
 /** Minimum content length (must have actual content) */
 const MIN_MEMORY_CONTENT_LENGTH = 1;
@@ -174,22 +175,54 @@ export function registerTools(server) {
               const existingMemory = getMemoryById(hitId, namespace);
               if (!existingMemory) continue;
 
-              // Check if content is substantially different (Jaccard distance > 0.5)
               const jaccard = jaccardDistance(content, existingMemory.content);
-              if (jaccard > 0.5) {
-                // This is a contradiction: similar topic, different content
-                logContradiction(hitId, id, `Auto-detected contradiction (similarity: ${sim.toFixed(3)}, content_diff: ${jaccard.toFixed(3)})`);
-                contradictions.push({
-                  old_memory_id: hitId,
-                  old_content_preview: existingMemory.content.slice(0, 100),
-                  similarity: sim.toFixed(4),
-                  content_difference: jaccard.toFixed(4)
-                });
+              // Contradiction: similar topic (high similarity), but differing key terms
+              if (jaccard > 0 && jaccard < 0.5) {
+                // Fetch provenances for trust calculation
+                const oldProv = getProvenance(hitId);
+                let oldReputation = 1.0;
+                if (oldProv && oldProv.source_type === 'agent' && oldProv.source_id) {
+                  const agentRow = db.prepare('SELECT reputation_score FROM agent_stats WHERE agent_id = ?').get(oldProv.source_id);
+                  if (agentRow) oldReputation = agentRow.reputation_score;
+                }
+
+                let newReputation = 1.0;
+                if (agent_id) {
+                  const agentRow = db.prepare('SELECT reputation_score FROM agent_stats WHERE agent_id = ?').get(agent_id);
+                  if (agentRow) newReputation = agentRow.reputation_score;
+                }
+
+                const trustOld = (oldProv ? oldProv.confidence : 1.0) * oldReputation;
+                const trustNew = 1.0 * newReputation; // New confidence is 1.0
+
+                const isSelfUpdate = oldProv && oldProv.source_type === 'agent' && oldProv.source_id === agent_id;
+
+                if (isSelfUpdate || trustNew > trustOld) {
+                  // New is preferred
+                  logContradiction(hitId, id, `Auto-detected contradiction: new memory is more trustworthy (similarity: ${sim.toFixed(3)}, content_diff: ${jaccard.toFixed(3)})`);
+                  contradictions.push({
+                    old_memory_id: hitId,
+                    old_content_preview: existingMemory.content.slice(0, 100),
+                    similarity: sim.toFixed(4),
+                    content_difference: jaccard.toFixed(4),
+                    resolution: 'replaced_old'
+                  });
+                } else {
+                  // Old is preferred
+                  logContradiction(id, hitId, `Auto-detected contradiction: existing memory is more trustworthy (similarity: ${sim.toFixed(3)}, content_diff: ${jaccard.toFixed(3)})`);
+                  contradictions.push({
+                    old_memory_id: hitId,
+                    old_content_preview: existingMemory.content.slice(0, 100),
+                    similarity: sim.toFixed(4),
+                    content_difference: jaccard.toFixed(4),
+                    resolution: 'kept_old'
+                  });
+                  break; // New memory was archived, stop contradiction check
+                }
               }
             }
           }
         } catch (e) {
-          // Contradiction detection is best-effort, don't fail the memory insertion
           console.error(`[persyst] Contradiction detection error: ${e.message}`);
         }
 
@@ -271,12 +304,22 @@ export function registerTools(server) {
         const oldMemory = getMemory(id);
         if (!oldMemory) return text({ error: `Memory #${id} not found` });
 
+        // Retrieve old agent_id from provenance
+        const oldProv = getProvenance(id);
+        const resolvedAgentId = agent_id || (oldProv && oldProv.source_type === 'agent' ? oldProv.source_id : null);
+
         // Insert new version
-        const newId = insertMemory(content, oldMemory.importance_score, {
-          source_type: agent_id ? 'agent' : 'manual',
-          source_id: agent_id || null,
-          confidence: 1.0
-        });
+        const newId = insertMemory(
+          content,
+          oldMemory.importance_score,
+          {
+            source_type: resolvedAgentId ? 'agent' : 'manual',
+            source_id: resolvedAgentId,
+            confidence: 1.0
+          },
+          oldMemory.namespace || 'shared',
+          id
+        );
 
         const embedding = await generateEmbedding(content);
         insertVector(newId, embedding);
@@ -499,14 +542,50 @@ export function registerTools(server) {
     },
     async ({ query }) => {
       try {
-        const hits = searchAllMemoriesFts(query, 5);
+        let hits = [];
+        const queryAsId = Number(query);
+        if (!isNaN(queryAsId) && Number.isInteger(queryAsId)) {
+          const mem = getAnyMemoryById(queryAsId);
+          if (mem) {
+            hits.push({ id: mem.id });
+          }
+        }
+
+        if (hits.length === 0) {
+          hits = searchAllMemoriesFts(query, 5);
+        }
+
+        // Fallback to LIKE query on memories content if FTS is empty or fails
+        if (hits.length === 0) {
+          try {
+            const likeRows = db.prepare("SELECT id FROM memories WHERE content LIKE ? LIMIT 5").all(`%${query}%`);
+            hits = likeRows;
+          } catch (_) {}
+        }
+
         if (hits.length === 0) {
           return text({ message: 'No memories matching query found.' });
         }
 
         const histories = {};
+        const seenChainKeys = new Set();
         for (const hit of hits) {
           const chain = getMemoryHistoryChain(hit.id);
+          if (chain.length === 0) continue;
+
+          // Deduplicate chains to prevent duplicate entries in history response
+          const chainKey = chain.map(c => c.id).sort((a, b) => a - b).join(',');
+          if (seenChainKeys.has(chainKey)) continue;
+          seenChainKeys.add(chainKey);
+
+          // Decorate chain versions with semantic diffs from the previous version
+          for (let idx = 0; idx < chain.length; idx++) {
+            if (idx > 0) {
+              chain[idx].diff_from_previous = diffWords(chain[idx - 1].content, chain[idx].content);
+            } else {
+              chain[idx].diff_from_previous = null;
+            }
+          }
           histories[hit.id] = chain;
         }
 
@@ -715,4 +794,62 @@ function jaccardDistance(a, b) {
   const union = wordsA.size + wordsB.size - intersection;
   if (union === 0) return 0;
   return 1 - (intersection / union);
+}
+
+/**
+ * Compute word-level diff between two text strings using dynamic programming.
+ * Highlights additions as [+added+] and deletions as [-deleted-].
+ * @param {string} oldStr - Original text
+ * @param {string} newStr - New version of text
+ * @returns {string} Diff string
+ */
+function diffWords(oldStr, newStr) {
+  const oldWords = oldStr.split(/(\s+)/);
+  const newWords = newStr.split(/(\s+)/);
+  
+  const dp = Array(oldWords.length + 1).fill(0).map(() => Array(newWords.length + 1).fill(0));
+  
+  for (let i = 1; i <= oldWords.length; i++) {
+    for (let j = 1; j <= newWords.length; j++) {
+      if (oldWords[i-1] === newWords[j-1]) {
+        dp[i][j] = dp[i-1][j-1] + 1;
+      } else {
+        dp[i][j] = Math.max(dp[i-1][j], dp[i][j-1]);
+      }
+    }
+  }
+  
+  let i = oldWords.length;
+  let j = newWords.length;
+  const result = [];
+  
+  while (i > 0 || j > 0) {
+    if (i > 0 && j > 0 && oldWords[i-1] === newWords[j-1]) {
+      result.unshift({ type: 'common', value: oldWords[i-1] });
+      i--;
+      j--;
+    } else if (j > 0 && (i === 0 || dp[i][j-1] >= dp[i-1][j])) {
+      result.unshift({ type: 'added', value: newWords[j-1] });
+      j--;
+    } else {
+      result.unshift({ type: 'removed', value: oldWords[i-1] });
+      i--;
+    }
+  }
+
+  // Combine consecutive items of the same type
+  const combined = [];
+  for (const part of result) {
+    if (combined.length > 0 && combined[combined.length - 1].type === part.type) {
+      combined[combined.length - 1].value += part.value;
+    } else {
+      combined.push({ ...part });
+    }
+  }
+
+  return combined.map(part => {
+    if (part.type === 'added') return `[+${part.value}+]`;
+    if (part.type === 'removed') return `[-${part.value}-]`;
+    return part.value;
+  }).join('');
 }

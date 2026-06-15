@@ -86,7 +86,13 @@ export async function getRecentCommits(repoPath, count = 20) {
       throw new Error(`Not a git repository: ${repoPath}`);
     }
     if (message.includes('ENOENT') || message.includes('not recognized')) {
-      throw new Error('Git is not installed or not in PATH');
+      throw new Error(
+        'Git binary not found. Git is required to ingest commits.\n' +
+        'Please install Git and ensure it is added to your system PATH:\n' +
+        '  - Windows: Download from https://git-scm.com/download/win\n' +
+        '  - macOS: Run `brew install git` or install Xcode Command Line Tools\n' +
+        '  - Linux: Run `sudo apt-get install git` or equivalent.'
+      );
     }
     throw new Error(`Failed to read git log: ${message}`);
   }

@@ -77,6 +77,11 @@ try {
   db.exec("ALTER TABLE memories ADD COLUMN namespace TEXT DEFAULT 'shared'");
 } catch (e) { /* Column already exists */ }
 
+// --- Migration: add parent_id column for history tracing ---
+try {
+  db.exec('ALTER TABLE memories ADD COLUMN parent_id INTEGER DEFAULT NULL');
+} catch (e) { /* Column already exists */ }
+
 // --- Index on namespace for fast filtered queries ---
 try {
   db.exec('CREATE INDEX IF NOT EXISTS idx_memories_namespace ON memories (namespace)');
@@ -226,7 +231,7 @@ console.error('[persyst] Schema initialized ✓');
 const stmts = {
   // -- Insert --
   insertMemory: db.prepare(
-    'INSERT INTO memories (content, importance_score, namespace) VALUES (?, ?, ?)'
+    'INSERT INTO memories (content, importance_score, namespace, parent_id) VALUES (?, ?, ?, ?)'
   ),
   insertVec: db.prepare(
     'INSERT INTO memories_vec (rowid, embedding) VALUES (?, ?)'
@@ -434,13 +439,19 @@ const stmts = {
  * @param {string} namespace - Namespace for agent isolation (default: 'shared')
  * @returns {number} The new memory's ID
  */
-export function insertMemory(content, importance = 1.0, provenanceInfo = null, namespace = 'shared') {
-  const result = stmts.insertMemory.run(content, importance, namespace || 'shared');
+export function insertMemory(content, importance = 1.0, provenanceInfo = null, namespace = 'shared', parentId = null) {
+  if (content && content.length > 10000) {
+    throw new Error('Memory content exceeds maximum length of 10000 characters.');
+  }
+  const result = stmts.insertMemory.run(content, importance, namespace || 'shared', parentId);
   const id = Number(result.lastInsertRowid);
 
   // Provenance Info handling
   const source_type = provenanceInfo?.source_type || 'manual';
-  const source_id = provenanceInfo?.source_id || null;
+  let source_id = provenanceInfo?.source_id || null;
+  if (source_type === 'agent' && source_id) {
+    source_id = source_id.toLowerCase();
+  }
   const confidence = provenanceInfo?.confidence !== undefined ? provenanceInfo.confidence : 1.0;
 
   stmts.insertProvenance.run(id, source_type, source_id, confidence);
@@ -677,10 +688,13 @@ export function insertEdge(sourceId, targetId, relation, sourceType, targetType)
  * Get all memories linked to an entity.
  */
 export function getMemoriesByEntity(entityId) {
-  // Find edges where this entity is the source pointing to memories
-  const edges = stmts.getEdgesBySource.all(entityId, 'entity');
-  const memoryEdges = edges.filter(e => e.target_type === 'memory');
-  return memoryEdges.map(e => stmts.getById.get(e.target_id)).filter(Boolean);
+  const edges = db.prepare(`
+    SELECT * FROM edges 
+    WHERE (source_id = ? AND source_type = 'entity' AND target_type = 'memory')
+       OR (target_id = ? AND target_type = 'entity' AND source_type = 'memory')
+  `).all(entityId, entityId);
+  const memoryIds = edges.map(e => e.source_type === 'memory' ? e.source_id : e.target_id);
+  return memoryIds.map(id => stmts.getById.get(id)).filter(Boolean);
 }
 
 /**
@@ -755,10 +769,30 @@ export function logContradiction(oldMemoryId, newMemoryId, reason = '') {
   stmts.archiveMemory.run(oldMemoryId);
   stmts.insertContradiction.run(oldMemoryId, newMemoryId, reason);
 
-  // Track that the agent's memory was contradicted
+  // Set parent_id to link memories for bidirectional history tracing
+  try {
+    db.prepare('UPDATE memories SET parent_id = ? WHERE id = ?').run(oldMemoryId, newMemoryId);
+  } catch (e) {
+    console.error(`[persyst] Failed to set parent_id on contradiction: ${e.message}`);
+  }
+
+  // Retrieve provenance of both versions for game-theoretic reputation calculation
   const oldProvenance = getProvenance(oldMemoryId);
+  const newProvenance = getProvenance(newMemoryId);
+
   if (oldProvenance && oldProvenance.source_type === 'agent' && oldProvenance.source_id) {
-    incrementAgentStat(oldProvenance.source_id, 'contradicted');
+    const isSelfCorrection = (newProvenance && newProvenance.source_id &&
+                              newProvenance.source_id.toLowerCase() === oldProvenance.source_id.toLowerCase()) ||
+                             reason.includes('update_memory');
+    if (!isSelfCorrection) {
+      // Different agent/manual source contradicts the old memory
+      incrementAgentStat(oldProvenance.source_id, 'contradicted');
+
+      // Boost reputation of the confirmer/contradictor if it's an agent
+      if (newProvenance && newProvenance.source_type === 'agent' && newProvenance.source_id !== oldProvenance.source_id) {
+        incrementAgentStat(newProvenance.source_id, 'confirmed');
+      }
+    }
   }
 }
 
@@ -766,22 +800,27 @@ export function logContradiction(oldMemoryId, newMemoryId, reason = '') {
  * Get provenance for a memory.
  */
 export function getProvenance(memoryId) {
-  return stmts.getProvenance.get(memoryId) || null;
+  const prov = stmts.getProvenance.get(memoryId) || null;
+  if (prov && prov.source_type === 'agent' && prov.source_id) {
+    prov.source_id = prov.source_id.toLowerCase();
+  }
+  return prov;
 }
 
 /**
  * Update agent reputation counters.
  */
 export function incrementAgentStat(agentId, action) {
-  stmts.upsertAgent.run(agentId);
+  const normalizedAgentId = agentId.toLowerCase();
+  stmts.upsertAgent.run(normalizedAgentId);
   if (action === 'created') {
-    stmts.incrementCreated.run(agentId);
+    stmts.incrementCreated.run(normalizedAgentId);
   } else if (action === 'confirmed') {
-    stmts.incrementConfirmed.run(agentId);
+    stmts.incrementConfirmed.run(normalizedAgentId);
   } else if (action === 'contradicted') {
-    stmts.incrementContradicted.run(agentId);
+    stmts.incrementContradicted.run(normalizedAgentId);
   }
-  stmts.recalculateReputation.run(agentId);
+  stmts.recalculateReputation.run(normalizedAgentId);
 }
 
 /**
@@ -841,13 +880,25 @@ export function getMemoryHistoryChain(memoryId) {
     if (versions.has(currentId)) continue;
     versions.add(currentId);
 
-    // Find ancestors (replaced by current) — using prepared statement
+    // 1. Find parent (ancestor) from memories table
+    const row = db.prepare('SELECT parent_id FROM memories WHERE id = ?').get(currentId);
+    if (row && row.parent_id !== null) {
+      if (!versions.has(row.parent_id)) queue.push(row.parent_id);
+    }
+
+    // 2. Find children (descendants) from memories table
+    const children = db.prepare('SELECT id FROM memories WHERE parent_id = ?').all(currentId);
+    for (const child of children) {
+      if (!versions.has(child.id)) queue.push(child.id);
+    }
+
+    // 3. Fallback: Find ancestors (replaced by current) from contradictions table
     const ancestors = stmts.getContradictionAncestors.all(currentId);
     ancestors.forEach(a => {
       if (!versions.has(a.old_memory_id)) queue.push(a.old_memory_id);
     });
 
-    // Find descendants (replaces current) — using prepared statement
+    // 4. Fallback: Find descendants (replaces current) from contradictions table
     const descendants = stmts.getContradictionDescendants.all(currentId);
     descendants.forEach(d => {
       if (!versions.has(d.new_memory_id)) queue.push(d.new_memory_id);
@@ -866,7 +917,19 @@ export function getMemoryHistoryChain(memoryId) {
     ORDER BY m.created_at ASC
   `).all(...ids);
 
-  return rows;
+  const uniqueRows = [];
+  const seenIds = new Set();
+  for (const row of rows) {
+    if (row && !seenIds.has(row.id)) {
+      seenIds.add(row.id);
+      if (row.source_type === 'agent' && row.source_id) {
+        row.source_id = row.source_id.toLowerCase();
+      }
+      uniqueRows.push(row);
+    }
+  }
+
+  return uniqueRows;
 }
 
 /**

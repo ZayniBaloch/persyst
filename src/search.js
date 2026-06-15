@@ -13,7 +13,8 @@ import db, {
   getMemoryById,
   boostMemory,
   getProvenance,
-  getMemoriesByEntity
+  getMemoriesByEntity,
+  getAllEntities
 } from './database.js';
 import { generateEmbedding } from './embeddings.js';
 import { createAttestation } from './attestation.js';
@@ -31,7 +32,7 @@ let lastDataVersion = 0;
  * @param {string|null} sessionId - Session identifier
  * @returns {Promise<Array>} Ranked search results (with .attestation property attached)
  */
-export async function searchHybrid(queryText, limit = 5, agentId = null, sessionId = null, namespace = null) {
+export async function searchHybrid(queryText, limit = 5, agentId = null, sessionId = null, namespace = null, skipAttestation = false) {
   // Sync in-memory cache with external DB changes using sqlite data_version
   try {
     const currentDataVersion = db.pragma('data_version', { simple: true });
@@ -142,11 +143,12 @@ export async function searchHybrid(queryText, limit = 5, agentId = null, session
   // --- Step 5: Apply MMR for diverse retrieval (Feature 3) ---
   const mmrResults = applyMMR(finalResults, limit);
 
-  // Generate cryptographic attestation for audit trails
-  const attestation = createAttestation(queryText, mmrResults, agentId, sessionId);
-
-  // Attach attestation object directly to the array to preserve compatibility with existing tests
-  mmrResults.attestation = attestation;
+  // Generate cryptographic attestation for audit trails (skip if called internally)
+  let attestation = null;
+  if (!skipAttestation) {
+    attestation = createAttestation(queryText, mmrResults, agentId, sessionId);
+    mmrResults.attestation = attestation;
+  }
 
   // --- Store in LRU cache (Feature 1) ---
   searchCache.set(cacheKey, mmrResults);
@@ -239,8 +241,18 @@ function jaccardSimilarity(a, b) {
  * @param {string|null} sessionId - Current session ID
  */
 export async function getOptimizedContext(queryText, maxTokens, agentId = null, sessionId = null, namespace = null) {
-  // 1. Run hybrid search to fetch top 20 memories (namespace-aware)
-  const searchHits = await searchHybrid(queryText, 20, agentId, sessionId, namespace);
+  // Extract entities mentioned in the query text to seed the graph search directly
+  const entities = getAllEntities(100);
+  const matchedEntityIds = new Set();
+  for (const ent of entities) {
+    const entNameLower = ent.name.toLowerCase();
+    if (queryText.toLowerCase().includes(entNameLower)) {
+      matchedEntityIds.add(ent.id);
+    }
+  }
+
+  // 1. Run hybrid search to fetch top 5 memories as seeds (skip attestation to avoid double-write)
+  const searchHits = await searchHybrid(queryText, 5, agentId, sessionId, namespace, true);
   const candidates = new Map();
 
   for (const hit of searchHits) {
@@ -254,38 +266,87 @@ export async function getOptimizedContext(queryText, maxTokens, agentId = null, 
       provenance: hit.provenance,
       source: 'search'
     });
+  }
 
-    // 2. Perform Graph Hop
-    const edges = db.prepare(`
-      SELECT * FROM edges 
-      WHERE (source_id = ? AND source_type = 'memory')
-         OR (target_id = ? AND target_type = 'memory')
-    `).all(hit.id, hit.id);
+  // 2. Perform Graph Hop (multi-hop traversal) globally
+  const hopQueue = [];
+  const visitedNodes = new Set(); // Stores "type:id" keys
 
-    const entityIds = [];
-    for (const edge of edges) {
-      if (edge.source_type === 'entity') entityIds.push(edge.source_id);
-      if (edge.target_type === 'entity') entityIds.push(edge.target_id);
+  // Seed with matched entities from query text
+  for (const entId of matchedEntityIds) {
+    const key = `entity:${entId}`;
+    if (!visitedNodes.has(key)) {
+      visitedNodes.add(key);
+      hopQueue.push({ id: entId, type: 'entity', depth: 0 });
     }
+  }
 
-    for (const entId of entityIds) {
-      const otherMemories = getMemoriesByEntity(entId);
-      for (const other of otherMemories) {
-        if (other.id === hit.id) continue;
-        if (candidates.has(other.id)) continue;
+  // Seed with search hit memories
+  for (const hit of searchHits) {
+    const key = `memory:${hit.id}`;
+    if (!visitedNodes.has(key)) {
+      visitedNodes.add(key);
+      hopQueue.push({ id: hit.id, type: 'memory', depth: 0 });
+    }
+  }
 
-        const otherProv = getProvenance(other.id);
-        candidates.set(other.id, {
-          id: other.id,
-          content: other.content,
-          importance_score: other.importance_score,
-          created_at: other.created_at,
-          last_accessed: other.last_accessed,
-          score: parseFloat(hit.hybrid_score) * 0.5, // 50% graph-hop penalty
-          provenance: otherProv,
-          source: 'hop'
-        });
+  // BFS to traverse memories and entities uniformly up to depth 4
+  while (hopQueue.length > 0) {
+    const { id, type, depth } = hopQueue.shift();
+    if (depth >= 4) continue;
+
+    const connectedEdges = db.prepare(`
+      SELECT * FROM edges 
+      WHERE (source_id = ? AND source_type = ?)
+         OR (target_id = ? AND target_type = ?)
+    `).all(id, type, id, type);
+
+    for (const edge of connectedEdges) {
+      let nextId, nextType;
+      if (edge.source_id === id && edge.source_type === type) {
+        nextId = edge.target_id;
+        nextType = edge.target_type;
+      } else {
+        nextId = edge.source_id;
+        nextType = edge.source_type;
       }
+
+      const key = `${nextType}:${nextId}`;
+      if (!visitedNodes.has(key)) {
+        visitedNodes.add(key);
+        hopQueue.push({ id: nextId, type: nextType, depth: depth + 1 });
+      }
+    }
+  }
+
+  // Now collect all hopped memories from the visited nodes
+  for (const key of visitedNodes) {
+    const [type, idStr] = key.split(':');
+    if (type === 'memory') {
+      const memId = Number(idStr);
+      if (candidates.has(memId)) continue; // Keep search hit info
+
+      // Check namespace filter if present
+      const other = getMemoryById(memId, namespace);
+      if (!other) continue;
+
+      let baseScore = 0.4;
+      if (searchHits.length > 0) {
+        const maxSearchScore = Math.max(...searchHits.map(h => parseFloat(h.hybrid_score)));
+        baseScore = maxSearchScore * 0.5;
+      }
+
+      const otherProv = getProvenance(memId);
+      candidates.set(memId, {
+        id: other.id,
+        content: other.content,
+        importance_score: other.importance_score,
+        created_at: other.created_at,
+        last_accessed: other.last_accessed,
+        score: baseScore,
+        provenance: otherProv,
+        source: 'hop'
+      });
     }
   }
 
@@ -355,11 +416,59 @@ export async function getOptimizedContext(queryText, maxTokens, agentId = null, 
 }
 
 /**
+ * Analyze relationship between two similar memories based on token sets.
+ * @param {string} a - Content of memory A
+ * @param {string} b - Content of memory B
+ * @returns {{ type: 'duplicate'|'subset'|'contradiction'|'different', keep?: 'a'|'b'|'canonical' }}
+ */
+function checkRelationship(a, b) {
+  const getWords = (text) => new Set(text.toLowerCase().split(/\s+/).map(w => w.replace(/[.,\/#!$%\^&\*;:{}=\-_`~()]/g, "")).filter(Boolean));
+  const wordsA = getWords(a);
+  const wordsB = getWords(b);
+
+  if (wordsA.size === 0 || wordsB.size === 0) return { type: 'duplicate', keep: 'a' };
+
+  let intersection = 0;
+  for (const w of wordsA) {
+    if (wordsB.has(w)) intersection++;
+  }
+
+  const overlapA = intersection / wordsA.size;
+  const overlapB = intersection / wordsB.size;
+
+  const union = wordsA.size + wordsB.size - intersection;
+  const jaccard = 1 - (intersection / union);
+
+  if (jaccard === 0) {
+    return { type: 'duplicate', keep: 'a' };
+  }
+
+  // Contradiction: similar topic, differing key terms
+  if (jaccard > 0.15 && jaccard < 0.5) {
+    return { type: 'contradiction' };
+  }
+
+  // Subset check
+  if (overlapA > 0.85 && wordsB.size > wordsA.size) {
+    return { type: 'subset', keep: 'b' };
+  }
+  if (overlapB > 0.85 && wordsA.size > wordsB.size) {
+    return { type: 'subset', keep: 'a' };
+  }
+
+  // Duplicate
+  if (jaccard < 0.25) {
+    return { type: 'duplicate', keep: 'canonical' };
+  }
+
+  return { type: 'different' };
+}
+
+/**
  * Performs memory consolidation by merging highly similar memories.
  * Bug 6 fix: DB mutations are wrapped in a transaction for atomicity.
  */
 export async function consolidateMemories(namespace = null) {
-  // Only consolidate within namespace boundaries to prevent cross-agent merging
   const query = namespace
     ? "SELECT * FROM memories WHERE valid_until IS NULL AND (namespace = ? OR namespace = 'shared')"
     : 'SELECT * FROM memories WHERE valid_until IS NULL';
@@ -369,19 +478,6 @@ export async function consolidateMemories(namespace = null) {
   const consolidated = [];
   const visited = new Set();
 
-  // Pre-compile the transaction for atomic DB operations (Bug 6 fix)
-  const archiveAndMerge = db.transaction((canonicalId, mergedContent, dupIds) => {
-    // Update canonical memory with merged content
-    db.prepare('UPDATE memories SET content = ?, last_accessed = unixepoch() WHERE id = ?').run(mergedContent, canonicalId);
-
-    // Archive duplicates
-    for (const dupId of dupIds) {
-      db.prepare('UPDATE memories SET valid_until = unixepoch() WHERE id = ?').run(dupId);
-      db.prepare('INSERT INTO contradictions (old_memory_id, new_memory_id, resolution_reason) VALUES (?, ?, ?)')
-        .run(dupId, canonicalId, `Consolidated into canonical memory #${canonicalId}`);
-    }
-  });
-
   for (const mem of activeMemories) {
     if (visited.has(mem.id)) continue;
 
@@ -389,7 +485,6 @@ export async function consolidateMemories(namespace = null) {
     const embedding = db.prepare('SELECT embedding FROM memories_vec WHERE rowid = ?').get(mem.id);
     if (!embedding) continue;
 
-    // sqlite-vec similarity search
     const hits = db.prepare(`
       SELECT rowid AS id, distance
       FROM memories_vec
@@ -397,54 +492,100 @@ export async function consolidateMemories(namespace = null) {
       AND k = 10
     `).all(embedding.embedding);
 
-    const duplicates = [];
+    const group = [];
     for (const hit of hits) {
-      if (Number(hit.id) === mem.id) continue;
       if (visited.has(Number(hit.id))) continue;
-
       const sim = Math.max(0, 1 - (hit.distance * hit.distance) / 2);
-      if (sim > 0.85) {
-        const dupMemory = db.prepare('SELECT * FROM memories WHERE id = ? AND valid_until IS NULL').get(Number(hit.id));
-        if (dupMemory) {
-          duplicates.push(dupMemory);
+      if (sim > 0.80) {
+        const other = db.prepare('SELECT * FROM memories WHERE id = ? AND valid_until IS NULL').get(Number(hit.id));
+        if (other) {
+          group.push(other);
         }
       }
     }
 
-    if (duplicates.length > 0) {
-      // Group found! Merge them.
-      const allMemoriesInGroup = [mem, ...duplicates];
+    if (group.length > 1) {
+      // Sort group by trust score (confidence * reputation) desc, then importance_score desc, then id desc
+      const getTrust = (m) => {
+        const prov = getProvenance(m.id);
+        let reputation = 1.0;
+        if (prov && prov.source_type === 'agent' && prov.source_id) {
+          const agentRow = db.prepare('SELECT reputation_score FROM agent_stats WHERE agent_id = ?').get(prov.source_id);
+          if (agentRow) reputation = agentRow.reputation_score;
+        }
+        return (prov ? prov.confidence : 1.0) * reputation;
+      };
 
-      // Sort by importance to pick canonical
-      allMemoriesInGroup.sort((a, b) => b.importance_score - a.importance_score);
-      const canonical = allMemoriesInGroup[0];
-      const dupesToArchive = allMemoriesInGroup.slice(1);
+      const groupWithTrust = group.map(m => ({ ...m, trust: getTrust(m) }));
+      groupWithTrust.sort((a, b) => b.trust - a.trust || b.importance_score - a.importance_score || a.id - b.id);
 
-      // Merge contents (unique sentences or concatenated text)
-      const contents = allMemoriesInGroup.map(m => m.content.trim());
-      const uniqueContents = Array.from(new Set(contents));
-      const mergedContent = uniqueContents.join('. ').replace(/\.\./g, '.');
+      // Resolve the group sequentially
+      let canonical = groupWithTrust[0];
+      const archivedIds = [];
+      visited.add(canonical.id);
 
-      // Generate new embedding OUTSIDE the transaction (async operation)
-      const newEmbedding = await generateEmbedding(mergedContent);
+      for (let i = 1; i < groupWithTrust.length; i++) {
+        const current = groupWithTrust[i];
+        const rel = checkRelationship(canonical.content, current.content);
 
-      // Run atomic DB transaction for all mutations (Bug 6 fix)
-      archiveAndMerge(canonical.id, mergedContent, dupesToArchive.map(d => d.id));
+        if (rel.type === 'contradiction') {
+          // Resolve contradiction: keep canonical, archive current
+          db.prepare('UPDATE memories SET valid_until = unixepoch() WHERE id = ?').run(current.id);
+          db.prepare('INSERT INTO contradictions (old_memory_id, new_memory_id, resolution_reason) VALUES (?, ?, ?)')
+            .run(current.id, canonical.id, `Consolidated contradiction: resolved in favor of canonical #${canonical.id}`);
 
-      // Update vector embedding (also outside transaction since vec0 tables have their own handling)
-      db.prepare('DELETE FROM memories_vec WHERE rowid = ?').run(canonical.id);
-      db.prepare('INSERT INTO memories_vec (rowid, embedding) VALUES (?, ?)').run(BigInt(canonical.id), Buffer.from(newEmbedding.buffer));
+          // Apply reputation changes since it's a cross-agent contradiction
+          const oldProv = getProvenance(current.id);
+          const newProv = getProvenance(canonical.id);
+          if (oldProv && oldProv.source_type === 'agent' && oldProv.source_id) {
+            const isSelf = newProv && newProv.source_type === 'agent' && newProv.source_id === oldProv.source_id;
+            if (!isSelf) {
+              db.prepare('UPDATE agent_stats SET memories_contradicted = memories_contradicted + 1 WHERE agent_id = ?').run(oldProv.source_id);
+              db.prepare('UPDATE agent_stats SET reputation_score = (memories_confirmed + 1.0) / (memories_contradicted + 1.0) WHERE agent_id = ?').run(oldProv.source_id);
+              if (newProv && newProv.source_type === 'agent') {
+                db.prepare('UPDATE agent_stats SET memories_confirmed = memories_confirmed + 1 WHERE agent_id = ?').run(newProv.source_id);
+                db.prepare('UPDATE agent_stats SET reputation_score = (memories_confirmed + 1.0) / (memories_contradicted + 1.0) WHERE agent_id = ?').run(newProv.source_id);
+              }
+            }
+          }
 
-      for (const dup of dupesToArchive) {
-        visited.add(dup.id);
+          archivedIds.push(current.id);
+          visited.add(current.id);
+        } else if (rel.type === 'subset') {
+          if (rel.keep === 'b') {
+            // current (B) is a superset of canonical (A). Swap them
+            db.prepare('UPDATE memories SET valid_until = unixepoch() WHERE id = ?').run(canonical.id);
+            db.prepare('INSERT INTO contradictions (old_memory_id, new_memory_id, resolution_reason) VALUES (?, ?, ?)')
+              .run(canonical.id, current.id, `Consolidated subset: replaced by more detailed #${current.id}`);
+
+            archivedIds.push(canonical.id);
+            canonical = current;
+          } else {
+            // canonical is superset
+            db.prepare('UPDATE memories SET valid_until = unixepoch() WHERE id = ?').run(current.id);
+            db.prepare('INSERT INTO contradictions (old_memory_id, new_memory_id, resolution_reason) VALUES (?, ?, ?)')
+              .run(current.id, canonical.id, `Consolidated subset: subsumed by more detailed #${canonical.id}`);
+
+            archivedIds.push(current.id);
+          }
+          visited.add(current.id);
+        } else if (rel.type === 'duplicate') {
+          db.prepare('UPDATE memories SET valid_until = unixepoch() WHERE id = ?').run(current.id);
+          db.prepare('INSERT INTO contradictions (old_memory_id, new_memory_id, resolution_reason) VALUES (?, ?, ?)')
+            .run(current.id, canonical.id, `Consolidated duplicate of #${canonical.id}`);
+
+          archivedIds.push(current.id);
+          visited.add(current.id);
+        }
       }
 
-      visited.add(canonical.id);
-      consolidated.push({
-        canonical_id: canonical.id,
-        merged_content: mergedContent,
-        archived_ids: dupesToArchive.map(d => d.id)
-      });
+      if (archivedIds.length > 0) {
+        consolidated.push({
+          canonical_id: canonical.id,
+          merged_content: canonical.content,
+          archived_ids: archivedIds
+        });
+      }
     }
   }
 

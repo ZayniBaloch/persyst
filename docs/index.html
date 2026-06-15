@@ -250,6 +250,7 @@
             <button class="tab-btn" data-tab="tab-vscode">VS Code</button>
             <button class="tab-btn" data-tab="tab-aider">Aider</button>
             <button class="tab-btn" data-tab="tab-antigravity">Antigravity</button>
+            <button class="tab-btn" data-tab="tab-qwen">Qwen</button>
           </div>
           <div class="tabs-content">
             <!-- Claude Code Pane -->
@@ -326,6 +327,29 @@
               <p class="config-desc" style="margin-top: 1rem;">2. Generate system rules files for the workspace:</p>
               <pre><code>npx persyst-mcp init</code></pre>
               <div class="note">Antigravity will load the tools during initialization and follow the workspace rules.</div>
+            </div>
+            <!-- Qwen Pane -->
+            <div id="tab-qwen" class="tab-pane">
+              <h4 style="margin-bottom: 0.75rem; font-size: 1.05rem; font-weight: 600; color: var(--text-primary);">Qwen Desktop (Electron App)</h4>
+              <p class="config-desc" style="margin-bottom: 0.75rem;">Configure the MCP server directly in the Qwen Desktop GUI settings to run inside Qwen's sandboxed environment on Windows:</p>
+              <div class="config-steps" style="margin-bottom: 1.5rem;">
+                <ol style="margin-left: 1.5rem; color: var(--text-secondary); font-size: 0.95rem;">
+                  <li style="margin-bottom: 0.5rem;">Open Qwen Desktop settings and navigate to the <strong>MCP</strong> section.</li>
+                  <li style="margin-bottom: 0.5rem;">Click <strong>Add MCP Server</strong>.</li>
+                  <li style="margin-bottom: 0.5rem;">Set Name to <code>persyst</code>.</li>
+                  <li style="margin-bottom: 0.5rem;">Set Type to <strong>STDIO (standard input/output)</strong>.</li>
+                  <li style="margin-bottom: 0.5rem;">Set Command to <code>npx</code>.</li>
+                  <li style="margin-bottom: 0.5rem;">In the <strong>Parameters</strong> text area, paste the following line-by-line configuration exactly:
+                    <pre style="margin-top: 0.5rem; background: var(--bg-secondary); padding: 0.75rem; border-radius: 6px; font-family: 'JetBrains Mono', monospace; font-size: 0.85rem; color: var(--text-primary); border: 1px solid var(--border-color); line-height: 1.4;">-y
+cross-env
+C:\PROGRA~1\nodejs\node.exe
+c:\Users\Super\Desktop\Peryst\index.js</pre>
+                  </li>
+                  <li style="margin-bottom: 0.5rem;">Leave the <strong>Environment Variables</strong> box completely blank.</li>
+                  <li style="margin-bottom: 0.5rem;">Click <strong>Save and enable</strong>.</li>
+                </ol>
+              </div>
+              <div class="note">This uses the <code>cross-env</code> package to redirect Qwen's internal Bun runtime to launch your system Node.js directly, bypassing Windows path isolation issues.</div>
             </div>
           </div>
         </div>

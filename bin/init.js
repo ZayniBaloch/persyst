@@ -45,6 +45,13 @@ You are integrated with Persyst, a local-first MCP memory server that stores use
 - Agentic Swarms & Namespaces: If you are part of a multi-agent swarm or need private partition, pass your agent name as \`agent_id\` and set \`shared: false\` to store private memories. For general project guidelines and files, leave \`shared: true\` (default) so other agents can access them.
 - Handle Contradictions: Persyst handles contradiction detection automatically. If a new fact contradicts an old memory, Persyst will flag it.
 - Quality Over Quantity: Do NOT store trivial facts, temporary conversation noise, or duplicate data. "Bad data is worse than no data". Only store long-term architecture decisions, project details, and explicit user preferences.
+
+## Mandatory Completion Checklist (HARD CONSTRAINT)
+Before writing your final response declaring a task, feature, or bug fix complete:
+1. Ask yourself: "Did I implement a feature, fix a bug, configure a tool, or discover a project rule?"
+2. If YES: Call the \`add_memory\` tool to store the milestone as your final tool call *before* writing your final message to the user.
+3. If NO: You may proceed to conclude without saving.
+Never rely on the user to remind you to save milestones.
 `;
 
 const GENERAL_GUIDE = `# Persyst General Agent Integration Guide

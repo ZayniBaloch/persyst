@@ -185,13 +185,13 @@ export function registerTools(server) {
             if (hitId === id) continue; // Skip self
 
             const sim = Math.max(0, 1 - (hit.distance * hit.distance) / 2);
-            if (sim > 0.75) {
+            if (sim > 0.70) {
               const existingMemory = getMemoryById(hitId, namespace);
               if (!existingMemory) continue;
 
               const jaccard = jaccardDistance(content, existingMemory.content);
               // Contradiction: similar topic (high similarity), but differing key terms
-              if (jaccard > 0 && jaccard < 0.5) {
+              if (jaccard > 0 && jaccard < 0.65) {
                 // Fetch provenances for trust calculation
                 const oldProv = getProvenance(hitId);
                 let oldReputation = 1.0;

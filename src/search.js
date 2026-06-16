@@ -474,7 +474,7 @@ function checkRelationship(a, b) {
   }
 
   // Contradiction: similar topic, differing key terms
-  if (jaccard > 0.15 && jaccard < 0.5) {
+  if (jaccard > 0.15 && jaccard < 0.65) {
     return { type: 'contradiction' };
   }
 

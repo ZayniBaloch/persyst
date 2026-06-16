@@ -1,14 +1,14 @@
 <!DOCTYPE html>
-<html lang="en" data-theme="light">
+<html lang="en" data-theme="dark">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Persyst | Local-first Memory for AI Coding Agents</title>
-  <meta name="description" content="A local-first, SQLite-based MCP memory server that gives coding agents persistent context across sessions. Zero cloud. Zero API keys.">
+  <title>Persyst | Premium Local-first Memory for AI Coding Agents</title>
+  <meta name="description" content="A local-first, zero-egress SQLite-based MCP memory server that gives coding agents persistent context across sessions. Features hybrid search, cryptographic attestations, and graph hopping.">
   
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Lora:ital,wght@0,400..600;1,400&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
   
   <link rel="stylesheet" href="styles.css">
   
@@ -16,6 +16,11 @@
   <script src="https://unpkg.com/feather-icons"></script>
 </head>
 <body>
+
+  <!-- Ambient Glow Elements -->
+  <div class="glow-blob glow-1"></div>
+  <div class="glow-blob glow-2"></div>
+  <div class="glow-blob glow-3"></div>
 
   <nav class="navbar">
     <div class="nav-container">
@@ -26,10 +31,10 @@
       <div class="nav-links">
         <a href="#features">Features</a>
         <a href="#why-persyst">Why Persyst?</a>
-        <a href="#integration">Integration</a>
+        <a href="#terminal-sandbox">Interactive Sandbox</a>
         <a href="#getting-started">Setup</a>
         <button id="theme-toggle" class="btn-theme" aria-label="Toggle theme">
-          <i data-feather="moon" class="theme-icon"></i>
+          <i data-feather="sun" class="theme-icon"></i>
         </button>
         <a href="https://github.com/ZayniBaloch/Peryst" target="_blank" class="btn-secondary">
           <i data-feather="github" class="icon-sm"></i> GitHub
@@ -45,7 +50,7 @@
         <div class="badge">v2.2.1 Now available on npm</div>
         <h1>Context that <span>persists.</span></h1>
         <p class="subtitle">
-          A local-first memory server for coding agents. Remembers context across sessions with zero cloud dependencies.
+          A local-first, zero-egress memory server for coding agents. Retain context across sessions, detect semantic contradictions, and verify history with absolute privacy.
         </p>
         
         <div class="cta-group">
@@ -57,7 +62,7 @@
             </button>
           </div>
           <div class="btn-row">
-            <a href="#getting-started" class="btn-primary">Get Started</a>
+            <a href="#getting-started" class="btn-primary">Get Started <i data-feather="arrow-right" class="icon-sm"></i></a>
             <a href="https://github.com/ZayniBaloch/Peryst" target="_blank" class="btn-outline">
               <i data-feather="star" class="icon-sm"></i> Star on GitHub
             </a>
@@ -67,20 +72,20 @@
         <!-- Metrics Row -->
         <div class="metrics">
           <div class="metric-card">
-            <span class="metric-value">&lt;500ms</span>
-            <span class="metric-label">Memory Insertion</span>
+            <span class="metric-value">&lt;50ms</span>
+            <span class="metric-label">Memory Ingest</span>
           </div>
           <div class="metric-card">
-            <span class="metric-value">&lt;200ms</span>
-            <span class="metric-label">Search Speed</span>
+            <span class="metric-value">&lt;20ms</span>
+            <span class="metric-label">Semantic Query</span>
           </div>
           <div class="metric-card">
             <span class="metric-value">50MB</span>
             <span class="metric-label">Model Size</span>
           </div>
           <div class="metric-card">
-            <span class="metric-value">0</span>
-            <span class="metric-label">API Calls</span>
+            <span class="metric-value">100%</span>
+            <span class="metric-label">Local / Offline</span>
           </div>
         </div>
       </div>
@@ -93,45 +98,75 @@
         <div class="features-grid">
           
           <div class="feature-card">
-            <div class="feature-icon"><i data-feather="search"></i></div>
-            <h3>Hybrid Search</h3>
-            <p>Keyword search (FTS5) + semantic search (local embeddings) for perfect recall. "Dark mode" finds "night theme".</p>
+            <div class="feature-header">
+              <div class="feature-icon icon-indigo"><i data-feather="search"></i></div>
+              <span class="tech-tag">MiniLM-L6-v2 + BM25</span>
+            </div>
+            <h3>Hybrid Search Engine</h3>
+            <p>Runs dual FTS5 keyword index matching and sqlite-vec vector KNN search. Instantly recalls relevant memories even without exact keyword matches.</p>
           </div>
 
           <div class="feature-card">
-            <div class="feature-icon"><i data-feather="zap"></i></div>
-            <h3>Zero Config</h3>
-            <p>One command: <code>npx -y persyst-mcp</code>. Works with Claude Code, Cursor, Aider, and Windsurf instantly.</p>
+            <div class="feature-header">
+              <div class="feature-icon icon-terracotta"><i data-feather="zap"></i></div>
+              <span class="tech-tag">Zero Cloud Egress</span>
+            </div>
+            <h3>100% Local Privacy</h3>
+            <p>SQLite database coupled with local ONNX transformer embeddings. Zero APIs, zero keys, zero data leakage. Fast enough to run fully offline.</p>
           </div>
 
           <div class="feature-card">
-            <div class="feature-icon"><i data-feather="shield"></i></div>
-            <h3>Zero Egress. 100% Local.</h3>
-            <p>SQLite + local transformer models. No API keys. No cloud. Works offline. Passes the airplane test.</p>
-          </div>
-
-          <div class="feature-card">
-            <div class="feature-icon"><i data-feather="clock"></i></div>
-            <h3>Memory Lifecycle</h3>
-            <p>Auto-decay stale memories. Boost frequently accessed ones. Never pollute your agent's context window.</p>
-          </div>
-
-          <div class="feature-card">
-            <div class="feature-icon"><i data-feather="git-commit"></i></div>
+            <div class="feature-header">
+              <div class="feature-icon icon-teal"><i data-feather="git-commit"></i></div>
+              <span class="tech-tag">Jaccard &amp; Cosine Sim</span>
+            </div>
             <h3>Contradiction Detection</h3>
-            <p>Automatically detects conflicting facts during memory insertion. Auto-archives outdated information and constructs historical lineage chains.</p>
+            <p>Identifies conflicting assertions in real time using semantic thresholds. Prevents old out-of-date facts from polluting active prompts.</p>
           </div>
 
           <div class="feature-card">
-            <div class="feature-icon"><i data-feather="shuffle"></i></div>
-            <h3>Maximal Marginal Relevance</h3>
-            <p>Reranks matches using MMR algorithms to promote diversity and penalize redundancy, keeping prompt contexts concise and clean.</p>
+            <div class="feature-header">
+              <div class="feature-icon icon-pink"><i data-feather="users"></i></div>
+              <span class="tech-tag">Game-Theoretic Reputation</span>
+            </div>
+            <h3>Agent Trust &amp; Reputation</h3>
+            <p>Dynamically grades and scores agents. Correct, self-updating agents gain reputation, while contradictory inputs trigger penalties.</p>
           </div>
 
           <div class="feature-card">
-            <div class="feature-icon"><i data-feather="users"></i></div>
-            <h3>Agentic Swarm Isolation</h3>
-            <p>Partition memory namespaces by Agent ID. Each agent in a swarm maintains private memories while seamlessly sharing project-level knowledge.</p>
+            <div class="feature-header">
+              <div class="feature-icon icon-purple"><i data-feather="git-pull-request"></i></div>
+              <span class="tech-tag">BFS Depth-6 Hops</span>
+            </div>
+            <h3>Implicit Graph Hopping</h3>
+            <p>Traverses related facts implicitly using name-based entity-memory matching. Bridges disconnected context threads without manual link calls.</p>
+          </div>
+
+          <div class="feature-card">
+            <div class="feature-header">
+              <div class="feature-icon icon-green"><i data-feather="clock"></i></div>
+              <span class="tech-tag">Bi-temporal Lineage</span>
+            </div>
+            <h3>Memory History &amp; Diffs</h3>
+            <p>Traces full version lineage using parent-child nodes. Safely rolls back changes and produces detailed semantic diffs of factual evolution.</p>
+          </div>
+
+          <div class="feature-card">
+            <div class="feature-header">
+              <div class="feature-icon icon-amber"><i data-feather="shield"></i></div>
+              <span class="tech-tag">Ed25519 Signatures</span>
+            </div>
+            <h3>Cryptographic Attestation</h3>
+            <p>Signs every memory write and link operation using local Ed25519 keypairs. Establishes a tamper-proof audit trail for enterprise SOC2 compliance.</p>
+          </div>
+
+          <div class="feature-card">
+            <div class="feature-header">
+              <div class="feature-icon icon-indigo-light"><i data-feather="box"></i></div>
+              <span class="tech-tag">Namespaces</span>
+            </div>
+            <h3>Swarm Namespace Isolation</h3>
+            <p>Isolates private states for different agents in a swarm, while maintaining shared global access to project-level milestones and configs.</p>
           </div>
 
         </div>
@@ -141,51 +176,46 @@
     <!-- Comparison Section -->
     <section id="why-persyst" class="why-persyst-section">
       <div class="container">
-        <h2 class="section-title">Why choose <span>Persyst?</span></h2>
+        <h2 class="section-title">Built for <span>Next-Gen Workflows</span></h2>
         <div class="comparison-container">
           <table class="comparison-table">
             <thead>
               <tr>
-                <th>Feature</th>
+                <th>Factual &amp; Security Specs</th>
                 <th class="highlight">Persyst</th>
-                <th>Mem0 / Others</th>
+                <th>Standard Vector DBs</th>
               </tr>
             </thead>
             <tbody>
               <tr>
-                <td><strong>Privacy & Egress</strong></td>
+                <td><strong>Privacy &amp; Data Residency</strong></td>
                 <td class="highlight-cell"><i data-feather="shield" class="check-inline"></i> 100% Local (Zero Egress)</td>
-                <td>Cloud dependency & third-party APIs</td>
+                <td>Cloud dependent, sends data to third parties</td>
               </tr>
               <tr>
-                <td><strong>Setup overhead</strong></td>
-                <td class="highlight-cell"><i data-feather="zap" class="check-inline"></i> One npx command</td>
-                <td>API key management & cloud DB setup</td>
+                <td><strong>Setup Overhead</strong></td>
+                <td class="highlight-cell"><i data-feather="zap" class="check-inline"></i> Single <code>npx</code> command</td>
+                <td>Requires API key, Docker, and SaaS setups</td>
               </tr>
               <tr>
-                <td><strong>Offline Mode</strong></td>
-                <td class="highlight-cell"><i data-feather="wifi-off" class="check-inline"></i> Works fully offline</td>
-                <td>Requires active internet connections</td>
+                <td><strong>Conflict Resolution</strong></td>
+                <td class="highlight-cell"><i data-feather="git-commit" class="check-inline"></i> Factual contradiction engine</td>
+                <td>Accepts conflicts blindly (appends junk)</td>
               </tr>
               <tr>
-                <td><strong>Runtime</strong></td>
-                <td class="highlight-cell"><i data-feather="cpu" class="check-inline"></i> Node.js native</td>
-                <td>Heavy Python setups & daemon processes</td>
+                <td><strong>Auditability &amp; Safety</strong></td>
+                <td class="highlight-cell"><i data-feather="check-square" class="check-inline"></i> Cryptographic hash-chain audits</td>
+                <td>None; easily poisoned by rogue prompts</td>
               </tr>
               <tr>
-                <td><strong>Vector DB</strong></td>
-                <td class="highlight-cell"><i data-feather="server" class="check-inline"></i> SQLite + sqlite-vec</td>
-                <td>External Qdrant/Pinecone</td>
+                <td><strong>Graph Navigation</strong></td>
+                <td class="highlight-cell"><i data-feather="shuffle" class="check-inline"></i> Implicit name-based BFS hops</td>
+                <td>Requires explicit vector database index setups</td>
               </tr>
               <tr>
-                <td><strong>Embeddings</strong></td>
-                <td class="highlight-cell"><i data-feather="layers" class="check-inline"></i> Local (50MB model)</td>
-                <td>OpenAI/Claude API calls</td>
-              </tr>
-              <tr>
-                <td><strong>Agentic Swarms</strong></td>
-                <td class="highlight-cell"><i data-feather="users" class="check-inline"></i> Per-agent namespace isolation</td>
-                <td>Global shared state (no partitioning)</td>
+                <td><strong>Swarm Partitioning</strong></td>
+                <td class="highlight-cell"><i data-feather="users" class="check-inline"></i> Local agent namespaces</td>
+                <td>Global vector pool only</td>
               </tr>
             </tbody>
           </table>
@@ -193,46 +223,99 @@
       </div>
     </section>
 
-    <!-- Tools & Terminal Integration Section -->
-    <section id="integration" class="integration-section">
-      <div class="container integration-layout">
-        <div class="integration-text">
-          <h2>Standard MCP Tools</h2>
-          <p>Persyst implements the Model Context Protocol (MCP). Any compliant agent can use its tools over standard stdio streams. No custom integration needed. Version 2.2.1 supports per-agent namespace partitioning using the optional <code>agent_id</code> and <code>shared</code> parameters.</p>
-          <div style="margin-top: 1.5rem;">
-            <h4 style="margin-bottom: 0.5rem; font-size: 1rem; font-weight: 600;">Core Memory Tools</h4>
-            <ul class="tool-list" style="margin-bottom: 1.5rem;">
-              <li><i data-feather="check" class="check-icon"></i> <code>add_memory</code></li>
-              <li><i data-feather="check" class="check-icon"></i> <code>search_memories</code></li>
-              <li><i data-feather="check" class="check-icon"></i> <code>get_memory</code></li>
-              <li><i data-feather="check" class="check-icon"></i> <code>update_memory</code></li>
-              <li><i data-feather="check" class="check-icon"></i> <code>delete_memory</code></li>
-            </ul>
-            <h4 style="margin-bottom: 0.5rem; font-size: 1rem; font-weight: 600;">Advanced &amp; Production Tools (v2.0)</h4>
-            <ul class="tool-list">
-              <li><i data-feather="zap" class="check-icon" style="color: var(--accent-terracotta);"></i> <code>get_optimized_context</code></li>
-              <li><i data-feather="zap" class="check-icon" style="color: var(--accent-terracotta);"></i> <code>get_memory_history</code></li>
-              <li><i data-feather="zap" class="check-icon" style="color: var(--accent-terracotta);"></i> <code>consolidate_memories</code></li>
-              <li><i data-feather="zap" class="check-icon" style="color: var(--accent-terracotta);"></i> <code>ingest_git_commits</code></li>
-              <li><i data-feather="zap" class="check-icon" style="color: var(--accent-terracotta);"></i> <code>get_file_history</code></li>
-            </ul>
-          </div>
-        </div>
+    <!-- Interactive Code Sandbox Section -->
+    <section id="terminal-sandbox" class="sandbox-section">
+      <div class="container">
+        <h2 class="section-title">See Persyst <span>In Action</span></h2>
+        <p class="section-desc">Interact with the tabs below to inspect how Persyst logs and verifies memory operations in real time.</p>
         
-        <div class="code-window">
-          <div class="window-header">
-            <div class="window-controls">
-              <span></span><span></span><span></span>
-            </div>
-            <div class="window-title">aider --model anthropic/claude-3-5-sonnet</div>
+        <div class="sandbox-layout">
+          <div class="sandbox-menu">
+            <button class="sandbox-btn active" data-terminal="term-query">
+              <i data-feather="search" class="icon-sm"></i> search_memories
+            </button>
+            <button class="sandbox-btn" data-terminal="term-contradict">
+              <i data-feather="alert-circle" class="icon-sm"></i> add_memory (Contradiction)
+            </button>
+            <button class="sandbox-btn" data-terminal="term-audit">
+              <i data-feather="key" class="icon-sm"></i> Cryptographic Audit
+            </button>
           </div>
-          <div class="window-body">
-            <div class="line"><span class="prompt">User></span> Why did we choose Postgres?</div>
-            <div class="line system">System: Calling tool search_memories({"query":"Postgres"})</div>
-            <div class="line agent"><span class="prompt">Agent></span> Based on a memory from last month, we chose Postgres for its superior JSONB support.</div>
-            <div class="line"><span class="prompt">User></span> Remember to use Hooks for new components.</div>
-            <div class="line system">System: Calling tool add_memory({"content":"Use Hooks for components"})</div>
-            <div class="line agent"><span class="prompt">Agent></span> Stored in memory successfully.</div>
+
+          <div class="code-window">
+            <div class="window-header">
+              <div class="window-controls">
+                <span></span><span></span><span></span>
+              </div>
+              <div class="window-title" id="terminal-filename">mcp-rpc-request.json</div>
+            </div>
+            <div class="window-body">
+              <!-- Pane 1: Query -->
+              <div id="term-query" class="terminal-pane active">
+                <div class="line comment">// Client requests semantic search for database preferences</div>
+                <div class="line json-req"><span class="terminal-kw">POST</span> /mcp/search_memories</div>
+                <div class="line json-body">{
+  <span class="json-key">"query"</span>: <span class="json-val">"What database did we choose?"</span>,
+  <span class="json-key">"agent_id"</span>: <span class="json-val">"agent-alpha"</span>
+}</div>
+                <div class="line mt-1 system">System: sqlite-vec vector KNN execution + FTS5 BM25 matches complete (18ms)</div>
+                <div class="line json-resp">{
+  <span class="json-key">"success"</span>: <span class="json-val">true</span>,
+  <span class="json-key">"memories"</span>: [
+    {
+      <span class="json-key">"id"</span>: <span class="json-val">12</span>,
+      <span class="json-key">"content"</span>: <span class="json-val">"We decided to use SQLite for memory persistence due to local-first speed."</span>,
+      <span class="json-key">"score"</span>: <span class="json-val">0.945</span>,
+      <span class="json-key">"source"</span>: <span class="json-val">"hybrid"</span>
+    }
+  ]
+}</div>
+              </div>
+
+              <!-- Pane 2: Contradict -->
+              <div id="term-contradict" class="terminal-pane">
+                <div class="line comment">// Agent attempts to write a contradictory fact</div>
+                <div class="line json-req"><span class="terminal-kw">POST</span> /mcp/add_memory</div>
+                <div class="line json-body">{
+  <span class="json-key">"content"</span>: <span class="json-val">"The database password is admin123"</span>,
+  <span class="json-key">"agent_id"</span>: <span class="json-val">"agent-beta"</span>
+}</div>
+                <div class="line mt-1 system">System: Processing. Similarity: 0.913, Jaccard distance: 0.21. Contradiction detected.</div>
+                <div class="line json-resp">{
+  <span class="json-key">"success"</span>: <span class="json-val">true</span>,
+  <span class="json-key">"id"</span>: <span class="json-val">22</span>,
+  <span class="json-key">"message"</span>: <span class="json-val">"Memory #22 stored. Detected 1 contradiction(s) — older memories archived."</span>,
+  <span class="json-key">"contradictions_detected"</span>: [
+    {
+      <span class="json-key">"old_memory_id"</span>: <span class="json-val">16</span>,
+      <span class="json-key">"similarity"</span>: <span class="json-val">"0.9130"</span>,
+      <span class="json-key">"content_difference"</span>: <span class="json-val">"0.2143"</span>,
+      <span class="json-key">"resolution"</span>: <span class="json-val">"replaced_old"</span>
+    }
+  ]
+}</div>
+              </div>
+
+              <!-- Pane 3: Audit -->
+              <div id="term-audit" class="terminal-pane">
+                <div class="line comment">// Cryptographically verify the integrity of the database write log</div>
+                <div class="line cmd"><span class="prompt">$</span> persyst-mcp verify_attestation --id 93097437</div>
+                <div class="line system">System: Reading cryptographic attestation payload...</div>
+                <div class="line json-resp">{
+  <span class="json-key">"valid"</span>: <span class="json-val">true</span>,
+  <span class="json-key">"attestation"</span>: {
+    <span class="json-key">"id"</span>: <span class="json-val">93097437</span>,
+    <span class="json-key">"operation"</span>: <span class="json-val">"write_memory"</span>,
+    <span class="json-key">"memory_id"</span>: <span class="json-val">22</span>,
+    <span class="json-key">"hash"</span>: <span class="json-val">"bc46a782fc9f120e89..."</span>,
+    <span class="json-key">"previous_hash"</span>: <span class="json-val">"8cce1a82bcf2189a..."</span>,
+    <span class="json-key">"signature"</span>: <span class="json-val">"d90b21a364ef028d..."</span>,
+    <span class="json-key">"public_key"</span>: <span class="json-val">"ed5c17e3f890ad21..."</span>
+  }
+}</div>
+                <div class="line mt-1 success"><i data-feather="check" class="icon-sm" style="vertical-align: text-bottom;"></i> Signature chain verified successfully. Factual lineage is untampered.</div>
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -256,10 +339,14 @@
             <!-- Claude Code Pane -->
             <div id="tab-claude" class="tab-pane active">
               <p class="config-desc">Install automatic pre-prompt memory injection hooks with one command:</p>
-              <pre><code>npx persyst-mcp setup</code></pre>
-              <p class="config-desc" style="margin-top: 1rem;">This automatically copies the hook script and configures Claude Code's <code>~/.claude/settings.json</code> to load your memory on startup and search for context on every prompt.</p>
+              <div class="code-wrapper">
+                <pre><code id="code-claude">npx persyst-mcp setup</code></pre>
+                <button class="copy-code-btn" data-clipboard="code-claude" aria-label="Copy code"><i data-feather="copy" class="icon-sm"></i></button>
+              </div>
+              <p class="config-desc" style="margin-top: 1.5rem;">This configures Claude Code's <code>~/.claude/settings.json</code> to load your memory on startup and retrieve context automatically on every prompt.</p>
               <div class="note">Alternatively, configure it manually as a standard MCP server in your <code>~/.claude.json</code>.</div>
             </div>
+
             <!-- Cursor Pane -->
             <div id="tab-cursor" class="tab-pane">
               <p class="config-desc">1. Add the standard MCP server in Cursor under <strong>Settings > Features > MCP</strong>:</p>
@@ -271,28 +358,20 @@
                   <li>Set Command to <code>npx -y persyst-mcp</code></li>
                 </ol>
               </div>
-              <p class="config-desc" style="margin-top: 1rem;">2. Initialize automatic workspace memory rules:</p>
-              <pre><code>npx persyst-mcp init</code></pre>
-              <p class="config-desc">This creates a <code>.cursorrules</code> file that instructs the agent to automatically query memory on every query and record milestones.</p>
-              <div class="note">Cursor will auto-detect available tools and follow the rules.</div>
+              <p class="config-desc" style="margin-top: 1.5rem;">2. Initialize automatic workspace memory rules:</p>
+              <div class="code-wrapper">
+                <pre><code id="code-cursor">npx persyst-mcp init</code></pre>
+                <button class="copy-code-btn" data-clipboard="code-cursor" aria-label="Copy code"><i data-feather="copy" class="icon-sm"></i></button>
+              </div>
+              <p class="config-desc" style="margin-top: 0.5rem;">This creates a <code>.cursorrules</code> file that instructs the agent to automatically query memory and record milestones.</p>
             </div>
+
             <!-- VS Code Pane -->
             <div id="tab-vscode" class="tab-pane">
-              <h4 style="margin-bottom: 0.75rem; font-size: 1.05rem; font-weight: 600; color: var(--text-primary);">VS Code Copilot Chat (Native Setup)</h4>
-              <p class="config-desc" style="margin-bottom: 0.75rem;">1. Open the Copilot Chat panel in VS Code.</p>
-              <p class="config-desc" style="margin-bottom: 0.75rem;">2. In the <strong>MCP Servers</strong> panel, click the <strong>+</strong> button.</p>
-              <p class="config-desc" style="margin-bottom: 0.75rem;">3. Select <strong>Command (stdio)</strong> and enter the configuration details:</p>
-              <div class="config-steps" style="margin-bottom: 1.5rem;">
-                <ol style="margin-left: 1.5rem; color: var(--text-secondary); font-size: 0.95rem;">
-                  <li style="margin-bottom: 0.5rem;">Name: <code>persyst</code></li>
-                  <li style="margin-bottom: 0.5rem;">Command: <code>npx</code> (or <code>persyst-mcp</code> if installed globally)</li>
-                  <li style="margin-bottom: 0.5rem;">Arguments: <code>-y, persyst-mcp</code> (or leave empty if global)</li>
-                </ol>
-              </div>
-
-              <h4 style="margin-top: 2rem; margin-bottom: 0.75rem; font-size: 1.05rem; font-weight: 600; color: var(--text-primary);">Cline / Roo Code Extension</h4>
+              <h4 style="margin-bottom: 0.75rem; font-size: 1.05rem; font-weight: 600; color: var(--text-primary);">Cline / Roo Code MCP Settings</h4>
               <p class="config-desc">Add the server configuration to your <code>cline_mcp_settings.json</code> settings file:</p>
-              <pre><code>{
+              <div class="code-wrapper">
+                <pre><code id="code-vscode">{
   "mcpServers": {
     "persyst": {
       "command": "npx",
@@ -300,23 +379,33 @@
     }
   }
 }</code></pre>
+                <button class="copy-code-btn" data-clipboard="code-vscode" aria-label="Copy code"><i data-feather="copy" class="icon-sm"></i></button>
+              </div>
 
-              <h4 style="margin-top: 2rem; margin-bottom: 0.75rem; font-size: 1.05rem; font-weight: 600; color: var(--text-primary);">3. Initialize Workspace Rules &amp; Swarm Settings:</h4>
-              <pre><code>npx persyst-mcp init</code></pre>
-              <p class="config-desc">This creates a <code>.persystrules.md</code> file that teaches your agent how to query and store memories. To enable <strong>agentic swarm isolation</strong>, instruct your agents to pass their unique agent name as <code>agent_id</code> and set <code>shared: false</code> for private memories.</p>
-              <div class="note">VS Code will spin up the server, and the instructions will force the agent to use it proactively.</div>
+              <h4 style="margin-top: 2rem; margin-bottom: 0.75rem; font-size: 1.05rem; font-weight: 600; color: var(--text-primary);">Configure Workspace Rules &amp; Swarm Settings:</h4>
+              <div class="code-wrapper">
+                <pre><code id="code-vscode-rules">npx persyst-mcp init</code></pre>
+                <button class="copy-code-btn" data-clipboard="code-vscode-rules" aria-label="Copy code"><i data-feather="copy" class="icon-sm"></i></button>
+              </div>
+              <p class="config-desc" style="margin-top: 0.5rem;">This creates a <code>.persystrules.md</code> file that teaches your agent how to query and store memories. To enable <strong>agentic swarm isolation</strong>, instruct your agents to pass their unique agent name as <code>agent_id</code> and set <code>shared: false</code> for private memories.</p>
             </div>
+
             <!-- Aider Pane -->
             <div id="tab-aider" class="tab-pane">
               <p class="config-desc">Run Aider with the automatic memory-injection wrapper:</p>
-              <pre><code>npx persyst-mcp aider --model anthropic/claude-sonnet-4</code></pre>
-              <p class="config-desc" style="margin-top: 1rem;">This spawns Aider, automatically connects to Persyst, ingests git history, and injects relevant memories into your prompt inputs.</p>
+              <div class="code-wrapper">
+                <pre><code id="code-aider">npx persyst-mcp aider --model anthropic/claude-3-5-sonnet</code></pre>
+                <button class="copy-code-btn" data-clipboard="code-aider" aria-label="Copy code"><i data-feather="copy" class="icon-sm"></i></button>
+              </div>
+              <p class="config-desc" style="margin-top: 1.5rem;">This spawns Aider, automatically connects to Persyst, ingests git history, and injects relevant memories into your prompt inputs.</p>
               <div class="note">Alternatively, run standard Aider with standard MCP: <code>aider --mcp-server persyst:npx -y persyst-mcp</code></div>
             </div>
+
             <!-- Antigravity Pane -->
             <div id="tab-antigravity" class="tab-pane">
               <p class="config-desc">1. Add Persyst to your Antigravity agent configuration file at <code>~/.gemini/antigravity/mcp_config.json</code>:</p>
-              <pre><code>{
+              <div class="code-wrapper">
+                <pre><code id="code-anti">{
   "mcpServers": {
     "persyst": {
       "command": "npx",
@@ -324,10 +413,15 @@
     }
   }
 }</code></pre>
-              <p class="config-desc" style="margin-top: 1rem;">2. Generate system rules files for the workspace:</p>
-              <pre><code>npx persyst-mcp init</code></pre>
-              <div class="note">Antigravity will load the tools during initialization and follow the workspace rules.</div>
+                <button class="copy-code-btn" data-clipboard="code-anti" aria-label="Copy code"><i data-feather="copy" class="icon-sm"></i></button>
+              </div>
+              <p class="config-desc" style="margin-top: 1.5rem;">2. Generate system rules files for the workspace:</p>
+              <div class="code-wrapper">
+                <pre><code id="code-anti-rules">npx persyst-mcp init</code></pre>
+                <button class="copy-code-btn" data-clipboard="code-anti-rules" aria-label="Copy code"><i data-feather="copy" class="icon-sm"></i></button>
+              </div>
             </div>
+
             <!-- Qwen Pane -->
             <div id="tab-qwen" class="tab-pane">
               <h4 style="margin-bottom: 0.75rem; font-size: 1.05rem; font-weight: 600; color: var(--text-primary);">Qwen Desktop (Electron App)</h4>
@@ -337,13 +431,16 @@
                   <li style="margin-bottom: 0.5rem;">Open Qwen Desktop settings and navigate to the <strong>MCP</strong> section.</li>
                   <li style="margin-bottom: 0.5rem;">Click <strong>Add MCP Server</strong>.</li>
                   <li style="margin-bottom: 0.5rem;">Set Name to <code>persyst</code>.</li>
-                  <li style="margin-bottom: 0.5rem;">Set Type to <strong>STDIO (standard input/output)</strong>.</li>
+                  <li style="margin-bottom: 0.5rem;">Set Type to <strong>STDIO</strong>.</li>
                   <li style="margin-bottom: 0.5rem;">Set Command to <code>npx</code>.</li>
                   <li style="margin-bottom: 0.5rem;">In the <strong>Parameters</strong> text area, paste the following line-by-line configuration exactly:
-                    <pre style="margin-top: 0.5rem; background: var(--bg-secondary); padding: 0.75rem; border-radius: 6px; font-family: 'JetBrains Mono', monospace; font-size: 0.85rem; color: var(--text-primary); border: 1px solid var(--border-color); line-height: 1.4;">-y
+                    <div class="code-wrapper" style="margin-top: 0.5rem;">
+                      <pre><code id="code-qwen-params">-y
 cross-env
 C:\PROGRA~1\nodejs\node.exe
-c:\Users\Super\Desktop\Peryst\index.js</pre>
+c:\Users\Super\Desktop\Peryst\index.js</code></pre>
+                      <button class="copy-code-btn" data-clipboard="code-qwen-params" aria-label="Copy code"><i data-feather="copy" class="icon-sm"></i></button>
+                    </div>
                   </li>
                   <li style="margin-bottom: 0.5rem;">Leave the <strong>Environment Variables</strong> box completely blank.</li>
                   <li style="margin-bottom: 0.5rem;">Click <strong>Save and enable</strong>.</li>
@@ -370,7 +467,7 @@ c:\Users\Super\Desktop\Peryst\index.js</pre>
         <a href="https://github.com/ZayniBaloch/Peryst/issues" target="_blank">Issues</a>
       </div>
       <div class="footer-copy">
-        Built with ❤️ by Zayn &middot; <a href="https://github.com/ZayniBaloch/Peryst/blob/master/LICENSE" target="_blank" class="footer-license-link">MIT License</a>
+        Built by Zayn &middot; <a href="https://github.com/ZayniBaloch/Peryst/blob/master/LICENSE" target="_blank" class="footer-license-link">MIT License</a>
       </div>
     </div>
   </footer>

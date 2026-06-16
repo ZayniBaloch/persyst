@@ -28,23 +28,23 @@
 
 [data-theme="light"] {
   /* Light Mode Colors */
-  --bg-color: #fafaf9;
-  --bg-secondary: #f5f5f4;
-  --surface-color: rgba(255, 255, 255, 0.8);
+  --bg-color: #f8fafc;
+  --bg-secondary: #f1f5f9;
+  --surface-color: rgba(255, 255, 255, 0.75);
   --surface-hover: rgba(255, 255, 255, 0.95);
-  --text-primary: #1c1917;
-  --text-secondary: #57534e;
-  --border-color: rgba(0, 0, 0, 0.08);
-  --border-hover: rgba(0, 0, 0, 0.15);
+  --text-primary: #0f172a;
+  --text-secondary: #475569;
+  --border-color: rgba(15, 23, 42, 0.06);
+  --border-hover: rgba(15, 23, 42, 0.12);
   
   --accent-indigo: #0284c7;
   --accent-violet: #059669;
   --accent-pink: #d97706;
   --accent-sunset: #c2410c;
   
-  --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.05);
-  --shadow-md: 0 10px 30px -10px rgba(0, 0, 0, 0.08);
-  --shadow-lg: 0 20px 50px -15px rgba(0, 0, 0, 0.12);
+  --shadow-sm: 0 1px 3px rgba(15, 23, 42, 0.03), 0 1px 2px rgba(15, 23, 42, 0.02);
+  --shadow-md: 0 8px 24px -6px rgba(15, 23, 42, 0.04), 0 6px 12px -4px rgba(15, 23, 42, 0.03);
+  --shadow-lg: 0 24px 48px -12px rgba(15, 23, 42, 0.06);
 }
 
 * {
@@ -86,7 +86,8 @@ body {
 }
 
 [data-theme="light"] .glow-blob {
-  opacity: 0.12;
+  opacity: 0.06;
+  filter: blur(180px);
 }
 
 .glow-1 {
@@ -322,8 +323,8 @@ body {
 }
 
 [data-theme="light"] .install-box {
-  background: #e2e8f0;
-  border-color: rgba(0, 0, 0, 0.05);
+  background: var(--bg-secondary);
+  border-color: var(--border-color);
 }
 
 .install-box:hover {
@@ -623,6 +624,11 @@ body {
   color: var(--text-primary);
 }
 
+[data-theme="light"] .comparison-table td.highlight-cell {
+  background: rgba(2, 132, 199, 0.03);
+  color: #0369a1;
+}
+
 .check-inline {
   width: 16px;
   height: 16px;
@@ -692,6 +698,10 @@ body {
   box-shadow: var(--shadow-sm);
 }
 
+[data-theme="light"] .sandbox-btn.active {
+  background: rgba(2, 132, 199, 0.06);
+}
+
 .code-window {
   background: #0b0e14;
   border-radius: 16px;
@@ -702,6 +712,7 @@ body {
 
 [data-theme="light"] .code-window {
   background: #0f172a;
+  border-color: rgba(15, 23, 42, 0.08);
 }
 
 .window-header {
@@ -797,6 +808,10 @@ body {
   scrollbar-width: none;
 }
 
+[data-theme="light"] .tabs-header {
+  background: rgba(15, 23, 42, 0.02);
+}
+
 .tabs-header::-webkit-scrollbar {
   display: none;
 }
@@ -861,6 +876,7 @@ body {
 
 [data-theme="light"] .tabs-content pre {
   background: #0f172a;
+  border-color: rgba(15, 23, 42, 0.08);
 }
 
 .tabs-content code {
@@ -915,6 +931,11 @@ body {
   font-size: 0.85rem;
   color: var(--text-primary);
   font-weight: 500;
+}
+
+[data-theme="light"] .note {
+  background: rgba(2, 132, 199, 0.04);
+  color: #0369a1;
 }
 
 /* Footer */

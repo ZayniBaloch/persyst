@@ -775,9 +775,11 @@ export function logContradiction(oldMemoryId, newMemoryId, reason = '') {
   stmts.archiveMemory.run(oldMemoryId);
   stmts.insertContradiction.run(oldMemoryId, newMemoryId, reason);
 
-  // Set parent_id to link memories for bidirectional history tracing
+  // Set parent_id to link memories for bidirectional history tracing (always newer pointing to older)
   try {
-    db.prepare('UPDATE memories SET parent_id = ? WHERE id = ?').run(oldMemoryId, newMemoryId);
+    const parentId = Math.min(oldMemoryId, newMemoryId);
+    const childId = Math.max(oldMemoryId, newMemoryId);
+    db.prepare('UPDATE memories SET parent_id = ? WHERE id = ?').run(parentId, childId);
   } catch (e) {
     console.error(`[persyst] Failed to set parent_id on contradiction: ${e.message}`);
   }

@@ -290,11 +290,12 @@ export async function getOptimizedContext(queryText, maxTokens, agentId = null, 
     }
   }
 
-  // BFS to traverse memories and entities uniformly up to depth 4
+  // BFS to traverse memories and entities uniformly up to depth 6
   while (hopQueue.length > 0) {
     const { id, type, depth } = hopQueue.shift();
-    if (depth >= 4) continue;
+    if (depth >= 6) continue;
 
+    // --- 2a. Explicit Graph Edges (from edges table) ---
     const connectedEdges = db.prepare(`
       SELECT * FROM edges 
       WHERE (source_id = ? AND source_type = ?)
@@ -315,6 +316,35 @@ export async function getOptimizedContext(queryText, maxTokens, agentId = null, 
       if (!visitedNodes.has(key)) {
         visitedNodes.add(key);
         hopQueue.push({ id: nextId, type: nextType, depth: depth + 1 });
+      }
+    }
+
+    // --- 2b. Implicit Name-Based Edges (for robustness when explicit edges are missing) ---
+    if (type === 'memory') {
+      const memoryRow = db.prepare('SELECT content FROM memories WHERE id = ?').get(id);
+      if (memoryRow && memoryRow.content) {
+        const contentLower = memoryRow.content.toLowerCase();
+        for (const ent of entities) {
+          if (contentLower.includes(ent.name.toLowerCase())) {
+            const nextKey = `entity:${ent.id}`;
+            if (!visitedNodes.has(nextKey)) {
+              visitedNodes.add(nextKey);
+              hopQueue.push({ id: ent.id, type: 'entity', depth: depth + 1 });
+            }
+          }
+        }
+      }
+    } else if (type === 'entity') {
+      const ent = entities.find(e => e.id === id);
+      if (ent && ent.name) {
+        const matchingMemories = db.prepare('SELECT id FROM memories WHERE content LIKE ? AND valid_until IS NULL').all(`%${ent.name}%`);
+        for (const row of matchingMemories) {
+          const nextKey = `memory:${row.id}`;
+          if (!visitedNodes.has(nextKey)) {
+            visitedNodes.add(nextKey);
+            hopQueue.push({ id: row.id, type: 'memory', depth: depth + 1 });
+          }
+        }
       }
     }
   }
@@ -489,7 +519,7 @@ export async function consolidateMemories(namespace = null) {
       SELECT rowid AS id, distance
       FROM memories_vec
       WHERE embedding MATCH ?
-      AND k = 10
+      AND k = 30
     `).all(embedding.embedding);
 
     const group = [];

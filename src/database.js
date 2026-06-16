@@ -288,7 +288,7 @@ const stmts = {
     "SELECT * FROM memories WHERE (namespace = ? OR namespace = 'shared') AND valid_until IS NULL ORDER BY importance_score DESC LIMIT ?"
   ),
   getProvenance: db.prepare(
-    'SELECT * FROM provenance WHERE memory_id = ?'
+    'SELECT * FROM provenance WHERE memory_id = ? ORDER BY id DESC'
   ),
   getAllAgentStats: db.prepare(
     'SELECT * FROM agent_stats ORDER BY reputation_score DESC'
@@ -544,6 +544,12 @@ export function deleteVec(id) {
 export function deleteMemory(id) {
   stmts.deleteEdgesByMemory.run(id, id);
   deleteVec(id);  // Remove vector first (no cascades on virtual tables)
+  try {
+    db.prepare('DELETE FROM provenance WHERE memory_id = ?').run(id);
+    db.prepare('DELETE FROM contradictions WHERE old_memory_id = ? OR new_memory_id = ?').run(id, id);
+  } catch (e) {
+    console.error(`[persyst] Clean up provenance/contradictions error: ${e.message}`);
+  }
   const result = stmts.deleteMemory.run(id);
   return result.changes > 0;
 }
@@ -812,6 +818,9 @@ export function getProvenance(memoryId) {
  */
 export function incrementAgentStat(agentId, action) {
   const normalizedAgentId = agentId.toLowerCase();
+  if (normalizedAgentId === 'antigravity-worker' || normalizedAgentId === 'user-dialogue') {
+    return; // Ignore internal/system identities from reputation penalties
+  }
   stmts.upsertAgent.run(normalizedAgentId);
   if (action === 'created') {
     stmts.incrementCreated.run(normalizedAgentId);
@@ -910,26 +919,28 @@ export function getMemoryHistoryChain(memoryId) {
 
   const placeholders = ids.map(() => '?').join(',');
   const rows = db.prepare(`
-    SELECT m.*, p.source_type, p.source_id, p.confidence 
-    FROM memories m
-    LEFT JOIN provenance p ON m.id = p.memory_id
-    WHERE m.id IN (${placeholders})
-    ORDER BY m.created_at ASC
+    SELECT * FROM memories
+    WHERE id IN (${placeholders})
+    ORDER BY created_at ASC
   `).all(...ids);
 
-  const uniqueRows = [];
-  const seenIds = new Set();
   for (const row of rows) {
-    if (row && !seenIds.has(row.id)) {
-      seenIds.add(row.id);
-      if (row.source_type === 'agent' && row.source_id) {
-        row.source_id = row.source_id.toLowerCase();
-      }
-      uniqueRows.push(row);
+    const prov = getProvenance(row.id);
+    if (prov) {
+      row.source_type = prov.source_type;
+      row.source_id = prov.source_id;
+      row.confidence = prov.confidence;
+    } else {
+      row.source_type = 'manual';
+      row.source_id = null;
+      row.confidence = 1.0;
+    }
+    if (row.source_type === 'agent' && row.source_id) {
+      row.source_id = row.source_id.toLowerCase();
     }
   }
 
-  return uniqueRows;
+  return rows;
 }
 
 /**

@@ -33,6 +33,7 @@ import db, {
   boostMemory,
   logContradiction,
   getProvenance,
+  incrementAgentStat,
   getAllAgentStats,
   getAttestationsByDateRange,
   getMemoryHistoryChain,
@@ -129,6 +130,8 @@ export function registerTools(server) {
     },
     async ({ content, importance, agent_id, session_id, shared }) => {
       try {
+        const normalizedAgentId = agent_id ? agent_id.toLowerCase() : null;
+
         // Bug 7 + Feature 4: Validate content size
         const validation = validateMemoryContent(content);
         if (!validation.valid) {
@@ -136,11 +139,22 @@ export function registerTools(server) {
         }
 
         // Derive namespace from agent_id and shared flag
-        const namespace = (shared || !agent_id) ? 'shared' : agent_id;
+        const namespace = (shared || !normalizedAgentId) ? 'shared' : normalizedAgentId;
 
         // Deduplication check (namespace-aware)
         const existing = getMemoryByContent(content, namespace);
         if (existing) {
+          // Re-attribute provenance to the calling agent if it was previously auto-attributed to log-watcher
+          const prov = getProvenance(existing.id);
+          if (prov && (prov.source_id === 'antigravity-worker' || prov.source_id === 'user-dialogue') && normalizedAgentId) {
+            try {
+              db.prepare("UPDATE provenance SET source_type = 'agent', source_id = ?, confidence = 1.0 WHERE memory_id = ?")
+                .run(normalizedAgentId, existing.id);
+              incrementAgentStat(normalizedAgentId, 'created');
+            } catch (e) {
+              console.error(`[persyst] Re-attribute provenance error: ${e.message}`);
+            }
+          }
           boostMemory(existing.id);
           return text({
             success: true,
@@ -151,8 +165,8 @@ export function registerTools(server) {
         }
 
         const id = insertMemory(content, importance, {
-          source_type: agent_id ? 'agent' : 'manual',
-          source_id: agent_id || null,
+          source_type: normalizedAgentId ? 'agent' : 'manual',
+          source_id: normalizedAgentId,
           confidence: 1.0
         }, namespace);
 
@@ -165,7 +179,7 @@ export function registerTools(server) {
         // Feature 2: Contradiction Detection
         let contradictions = [];
         try {
-          const similarHits = searchVector(embedding, 3);
+          const similarHits = searchVector(embedding, 20);
           for (const hit of similarHits) {
             const hitId = Number(hit.rowid);
             if (hitId === id) continue; // Skip self
@@ -187,15 +201,15 @@ export function registerTools(server) {
                 }
 
                 let newReputation = 1.0;
-                if (agent_id) {
-                  const agentRow = db.prepare('SELECT reputation_score FROM agent_stats WHERE agent_id = ?').get(agent_id);
+                if (normalizedAgentId) {
+                  const agentRow = db.prepare('SELECT reputation_score FROM agent_stats WHERE agent_id = ?').get(normalizedAgentId);
                   if (agentRow) newReputation = agentRow.reputation_score;
                 }
 
                 const trustOld = (oldProv ? oldProv.confidence : 1.0) * oldReputation;
                 const trustNew = 1.0 * newReputation; // New confidence is 1.0
 
-                const isSelfUpdate = oldProv && oldProv.source_type === 'agent' && oldProv.source_id === agent_id;
+                const isSelfUpdate = oldProv && oldProv.source_type === 'agent' && oldProv.source_id === normalizedAgentId;
 
                 if (isSelfUpdate || trustNew > trustOld) {
                   // New is preferred
@@ -295,6 +309,8 @@ export function registerTools(server) {
     },
     async ({ id, content, agent_id }) => {
       try {
+        const normalizedAgentId = agent_id ? agent_id.toLowerCase() : null;
+
         // Bug 7 + Feature 4: Validate content size
         const validation = validateMemoryContent(content);
         if (!validation.valid) {
@@ -306,7 +322,7 @@ export function registerTools(server) {
 
         // Retrieve old agent_id from provenance
         const oldProv = getProvenance(id);
-        const resolvedAgentId = agent_id || (oldProv && oldProv.source_type === 'agent' ? oldProv.source_id : null);
+        const resolvedAgentId = normalizedAgentId || (oldProv && oldProv.source_type === 'agent' ? oldProv.source_id : null);
 
         // Insert new version
         const newId = insertMemory(

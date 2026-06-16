@@ -39,27 +39,54 @@ test.after(() => {
 
 test('Epistemic Resolutions & QA Stress-Test Fixes', async (t) => {
   
-  await t.test('1. Cross-Agent Contradiction Detection (Trust scoring)', async () => {
+  await t.test('1. Cross-Agent Contradiction Detection (Trust scoring & case-insensitivity)', async () => {
     const addMemoryHandler = handlers['add_memory'];
     const getStatsHandler = handlers['get_agent_stats'];
     
-    // Set up reputation stats for agents beforehand
+    // 1a. Verify Case-Insensitivity of agent ID stats (AGENT-TRUSTED and agent-trusted map to same row)
     incrementAgentStat('agent-trusted', 'created');
     incrementAgentStat('agent-trusted', 'confirmed'); // reputation will be high: (1 + 1.0) / (0 + 1.0) = 2.0
+    incrementAgentStat('AGENT-TRUSTED', 'confirmed'); // reputation will be even higher: (2 + 1.0) / (0 + 1.0) = 3.0
     
     incrementAgentStat('agent-untrusted', 'created');
     incrementAgentStat('agent-untrusted', 'contradicted'); // reputation will be low: (0 + 1.0) / (1 + 1.0) = 0.5
 
-    // Agent Trusted stores a fact
+    const statsRes0 = await getStatsHandler();
+    const stats0 = JSON.parse(statsRes0.content[0].text).stats;
+    const trustedStats0 = stats0.find(s => s.agent_id === 'agent-trusted');
+    assert.ok(trustedStats0);
+    assert.equal(trustedStats0.memories_confirmed, 2, 'Case-insensitive stats should merge to same agent_id row');
+
+    // 1b. Verify antigravity-worker is ignored from reputation updates
+    incrementAgentStat('antigravity-worker', 'contradicted');
+    const statsRes1 = await getStatsHandler();
+    const stats1 = JSON.parse(statsRes1.content[0].text).stats;
+    const workerStats = stats1.find(s => s.agent_id === 'antigravity-worker');
+    assert.equal(workerStats, undefined, 'antigravity-worker should be ignored from reputation stats');
+
+    // 1c. Insert memory as log-watcher (antigravity-worker) to test ghost re-attribution
+    const watcherMemId = insertMemory('Persyst primary database is PostgreSQL.', 0.9, {
+      source_type: 'agent',
+      source_id: 'antigravity-worker',
+      confidence: 0.8
+    }, 'shared');
+    const watcherEmb = await generateEmbedding('Persyst primary database is PostgreSQL.');
+    insertVector(watcherMemId, watcherEmb);
+
+    // Calling add_memory with agent-trusted (cased as AGENT-TRUSTED) should re-attribute it
     const resA = await addMemoryHandler({
       content: 'Persyst primary database is PostgreSQL.',
-      agent_id: 'agent-trusted',
+      agent_id: 'AGENT-TRUSTED',
       importance: 0.9,
       shared: true
     });
     const dataA = JSON.parse(resA.content[0].text);
     assert.ok(dataA.success);
-    
+    assert.equal(dataA.id, watcherMemId, 'Should return the existing memory ID');
+
+    const updatedProv = getProvenance(watcherMemId);
+    assert.equal(updatedProv.source_id, 'agent-trusted', 'Provenance should be re-attributed to calling agent in lowercase');
+
     // Agent Untrusted tries to store a contradictory fact
     const resB = await addMemoryHandler({
       content: 'Persyst primary database is MongoDB.',
@@ -83,12 +110,12 @@ test('Epistemic Resolutions & QA Stress-Test Fixes', async (t) => {
     assert.ok(archivedB.valid_until !== null, 'Untrusted agent memory valid_until should be populated');
 
     // Verify reputation updates
-    const statsRes = await getStatsHandler();
-    const stats = JSON.parse(statsRes.content[0].text).stats;
-    const trustedStats = stats.find(s => s.agent_id === 'agent-trusted');
-    const untrustedStats = stats.find(s => s.agent_id === 'agent-untrusted');
+    const statsRes2 = await getStatsHandler();
+    const stats2 = JSON.parse(statsRes2.content[0].text).stats;
+    const trustedStats = stats2.find(s => s.agent_id === 'agent-trusted');
+    const untrustedStats = stats2.find(s => s.agent_id === 'agent-untrusted');
     
-    assert.equal(trustedStats.memories_confirmed, 2, 'Trusted agent should be confirmed again');
+    assert.equal(trustedStats.memories_confirmed, 3, 'Trusted agent should be confirmed again');
     assert.equal(untrustedStats.memories_contradicted, 2, 'Untrusted agent contradicted should increment');
   });
 
@@ -159,36 +186,40 @@ test('Epistemic Resolutions & QA Stress-Test Fixes', async (t) => {
     assert.equal(active1.content, 'The local build is optimized for release.', 'Canonical memory content should remain clean');
   });
 
-  await t.test('4. Graph Hopping Traversal in Context Retrieval (depth 2 BFS)', async () => {
-    // Create three entities
+  await t.test('4. Graph Hopping Traversal in Context Retrieval (depth 6 BFS / Implicit hopping)', async () => {
+    // Create three entities without any explicit edges
     const entA = insertEntity('Entity-A', 'concept');
     const entB = insertEntity('Entity-B', 'concept');
     const entC = insertEntity('Entity-C', 'concept');
 
-    // Connect them in a chain A -> B -> C
-    insertEdge(entA, entB, 'related_to', 'entity', 'entity');
-    insertEdge(entB, entC, 'related_to', 'entity', 'entity');
-
-    // Memory 1 (Direct search hit) is connected to Entity-A
-    const memId1 = insertMemory('Compiler optimizations are configured.', 0.9, { source_type: 'manual' }, 'shared');
-    const emb1 = await generateEmbedding('Compiler optimizations are configured.');
+    // Memory 1 (Direct search hit) mentions Entity-A
+    const memId1 = insertMemory('Compiler optimizations are configured for Entity-A.', 0.9, { source_type: 'manual' }, 'shared');
+    const emb1 = await generateEmbedding('Compiler optimizations are configured for Entity-A.');
     insertVector(memId1, emb1);
-    insertEdge(entA, memId1, 'mentions', 'entity', 'memory');
 
-    // Memory 2 (Hopped fact) is connected to Entity-C (2 hops away: M1 -> A -> B -> C -> M2)
-    const memId2 = insertMemory('Production server is hosted on AWS.', 0.8, { source_type: 'manual' }, 'shared');
-    const emb2 = await generateEmbedding('Production server is hosted on AWS.');
+    // Memory 2 connects Entity-A to Entity-B
+    const memId2 = insertMemory('Entity-A is related to Entity-B.', 0.8, { source_type: 'manual' }, 'shared');
+    const emb2 = await generateEmbedding('Entity-A is related to Entity-B.');
     insertVector(memId2, emb2);
-    insertEdge(entC, memId2, 'mentions', 'entity', 'memory');
 
-    // Run getOptimizedContext searching for M1's concept
+    // Memory 3 connects Entity-B to Entity-C
+    const memId3 = insertMemory('Entity-B is connected to Entity-C.', 0.8, { source_type: 'manual' }, 'shared');
+    const emb3 = await generateEmbedding('Entity-B is connected to Entity-C.');
+    insertVector(memId3, emb3);
+
+    // Memory 4 (Hopped fact) mentions Entity-C (this is 6 hops away from starting memory 1: M1 -> A -> M2 -> B -> M3 -> C -> M4)
+    const memId4 = insertMemory('Production server is hosted on Entity-C.', 0.8, { source_type: 'manual' }, 'shared');
+    const emb4 = await generateEmbedding('Production server is hosted on Entity-C.');
+    insertVector(memId4, emb4);
+
+    // Run getOptimizedContext searching for M1's concept (without mentioning Entity-C in query)
     const getContextHandler = handlers['get_optimized_context'];
     const res = await getContextHandler({ query: 'Compiler optimizations', max_tokens: 4000 });
     const data = JSON.parse(res.content[0].text);
 
-    // M2 should be retrieved via graph hopping
-    const hoppedMem = data.memories.find(m => m.id === memId2);
-    assert.ok(hoppedMem, 'Memory 2 should be traversed and retrieved');
+    // M4 should be retrieved via implicit graph hopping
+    const hoppedMem = data.memories.find(m => m.id === memId4);
+    assert.ok(hoppedMem, 'Memory 4 should be traversed and retrieved');
     assert.equal(hoppedMem.source, 'hop', 'Hopped memory should have source: "hop" provenance');
   });
 

@@ -9,10 +9,10 @@
   --border-color: rgba(255, 255, 255, 0.08);
   --border-hover: rgba(255, 255, 255, 0.15);
   
-  --accent-indigo: #6366f1;
-  --accent-violet: #a855f7;
-  --accent-pink: #ec4899;
-  --accent-sunset: #f97316;
+  --accent-indigo: #0ea5e9;
+  --accent-violet: #10b981;
+  --accent-pink: #f59e0b;
+  --accent-sunset: #ea580c;
   
   --success-color: #10b981;
   --error-color: #f43f5e;
@@ -37,10 +37,10 @@
   --border-color: rgba(0, 0, 0, 0.08);
   --border-hover: rgba(0, 0, 0, 0.15);
   
-  --accent-indigo: #4f46e5;
-  --accent-violet: #8b5cf6;
-  --accent-pink: #db2777;
-  --accent-sunset: #ea580c;
+  --accent-indigo: #0284c7;
+  --accent-violet: #059669;
+  --accent-pink: #d97706;
+  --accent-sunset: #c2410c;
   
   --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.05);
   --shadow-md: 0 10px 30px -10px rgba(0, 0, 0, 0.08);
@@ -94,7 +94,7 @@ body {
   left: 15%;
   width: 50vw;
   height: 50vw;
-  background: radial-gradient(circle, var(--accent-indigo) 0%, rgba(99, 102, 241, 0) 70%);
+  background: radial-gradient(circle, var(--accent-indigo) 0%, rgba(14, 165, 233, 0) 70%);
   animation: float-slow 20s infinite alternate;
 }
 
@@ -103,7 +103,7 @@ body {
   right: -10%;
   width: 45vw;
   height: 45vw;
-  background: radial-gradient(circle, var(--accent-violet) 0%, rgba(168, 85, 247, 0) 70%);
+  background: radial-gradient(circle, var(--accent-violet) 0%, rgba(16, 185, 129, 0) 70%);
   animation: float-slow 25s infinite alternate-reverse;
 }
 
@@ -112,7 +112,7 @@ body {
   left: -5%;
   width: 40vw;
   height: 40vw;
-  background: radial-gradient(circle, var(--accent-sunset) 0%, rgba(249, 115, 22, 0) 70%);
+  background: radial-gradient(circle, var(--accent-sunset) 0%, rgba(234, 88, 12, 0) 70%);
 }
 
 @keyframes float-slow {
@@ -251,11 +251,11 @@ body {
   font-weight: 600;
   letter-spacing: 0.05em;
   text-transform: uppercase;
-  background: rgba(99, 102, 241, 0.08);
-  border: 1px solid rgba(99, 102, 241, 0.2);
+  background: rgba(14, 165, 233, 0.08);
+  border: 1px solid rgba(14, 165, 233, 0.2);
   color: var(--accent-indigo);
   margin-bottom: 2rem;
-  box-shadow: 0 4px 12px rgba(99, 102, 241, 0.05);
+  box-shadow: 0 4px 12px rgba(14, 165, 233, 0.05);
 }
 
 .badge::before {
@@ -389,12 +389,12 @@ body {
   font-weight: 600;
   font-size: 0.95rem;
   transition: all 0.2s ease;
-  box-shadow: 0 8px 20px rgba(99, 102, 241, 0.25);
+  box-shadow: 0 8px 20px rgba(14, 165, 233, 0.25);
 }
 
 .btn-primary:hover {
   transform: translateY(-2px);
-  box-shadow: 0 12px 28px rgba(99, 102, 241, 0.35);
+  box-shadow: 0 12px 28px rgba(14, 165, 233, 0.35);
 }
 
 .btn-outline {
@@ -538,14 +538,14 @@ body {
   height: 22px;
 }
 
-.icon-indigo { background: rgba(99, 102, 241, 0.08); color: var(--accent-indigo); }
+.icon-indigo { background: rgba(14, 165, 233, 0.08); color: var(--accent-indigo); }
 .icon-terracotta { background: rgba(249, 115, 22, 0.08); color: var(--accent-sunset); }
 .icon-teal { background: rgba(16, 185, 129, 0.08); color: #10b981; }
-.icon-pink { background: rgba(236, 72, 153, 0.08); color: var(--accent-pink); }
-.icon-purple { background: rgba(168, 85, 247, 0.08); color: var(--accent-violet); }
+.icon-pink { background: rgba(245, 158, 11, 0.08); color: var(--accent-pink); }
+.icon-purple { background: rgba(16, 185, 129, 0.08); color: var(--accent-violet); }
 .icon-green { background: rgba(34, 197, 94, 0.08); color: #22c55e; }
 .icon-amber { background: rgba(245, 158, 11, 0.08); color: #f59e0b; }
-.icon-indigo-light { background: rgba(129, 140, 248, 0.08); color: #818cf8; }
+.icon-indigo-light { background: rgba(14, 165, 233, 0.08); color: var(--accent-indigo); }
 
 .tech-tag {
   font-family: var(--font-mono);
@@ -618,7 +618,7 @@ body {
 }
 
 .comparison-table th.highlight, .comparison-table td.highlight-cell {
-  background: rgba(99, 102, 241, 0.04);
+  background: rgba(14, 165, 233, 0.04);
   font-weight: 500;
   color: var(--text-primary);
 }
@@ -688,7 +688,7 @@ body {
 .sandbox-btn.active {
   color: var(--text-primary);
   border-color: var(--accent-indigo);
-  background: rgba(99, 102, 241, 0.05);
+  background: rgba(14, 165, 233, 0.05);
   box-shadow: var(--shadow-sm);
 }
 
@@ -909,7 +909,7 @@ body {
 .note {
   margin-top: 1.5rem;
   padding: 0.85rem 1.2rem;
-  background: rgba(99, 102, 241, 0.05);
+  background: rgba(14, 165, 233, 0.05);
   border-left: 3px solid var(--accent-indigo);
   border-radius: 6px;
   font-size: 0.85rem;

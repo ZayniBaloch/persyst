@@ -30,6 +30,8 @@ import {
 } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
+import http from 'http';
+import https from 'https';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -57,6 +59,331 @@ const MAX_QUEUE_AGE_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 const DEDUP_SIMILARITY_THRESHOLD = 0.80;
 const RECENT_MEMORY_WINDOW_S = 60; // Check last 60 seconds for agent race
 const MIN_CONFIDENCE = 0.65;
+
+// ============================================================
+// LLM EXTRACTION PIPELINE (Tiers 1 & 2)
+// ============================================================
+
+const EXTRACTION_SYSTEM_PROMPT = `You are a precise developer memory extraction assistant.
+Analyze the following developer conversation turn or transcript and extract any:
+1. Explicit user preferences (e.g. "I prefer HSL colors", "I like clean UI")
+2. Architectural decisions (e.g. "We decided to expose a gateway server on port 4321")
+3. Project stack choices (e.g. "Using Node.js for backend")
+4. Coding rules/styles (e.g. "Always use camelCase for variables")
+5. Project config/settings (e.g. "Port is set to 4321")
+
+Do not extract temporary tasks, questions, or vague conversational statements.
+Do not invent facts. Only extract facts that are clearly stated or implied by the developer.
+
+You MUST respond with a valid JSON array of objects, and absolutely NOTHING else. No markdown formatting, no explanation.
+Each object must have the following fields:
+- "content": A clean, concise statement of the preference/decision (e.g., "Preference: Use HSL tailwind colors"). Start the content with the prefix indicating the category: "Preference: ...", "Decision: ...", "Stack: ...", "Rule: ...", "Config: ...".
+- "category": One of "preference", "decision", "stack", "naming", "architecture", "rule", "config".
+- "confidence": A float value between 0.65 and 1.0 representing your confidence.
+
+Example output:
+[
+  {
+    "content": "Preference: Always use vanilla CSS for maximum control.",
+    "category": "preference",
+    "confidence": 0.95
+  }
+]`;
+
+function parseJsonArray(text) {
+  try {
+    let clean = text.trim();
+    if (clean.startsWith('```json')) {
+      clean = clean.slice(7);
+    } else if (clean.startsWith('```')) {
+      clean = clean.slice(3);
+    }
+    if (clean.endsWith('```')) {
+      clean = clean.slice(0, -3);
+    }
+    clean = clean.trim();
+    const arr = JSON.parse(clean);
+    if (Array.isArray(arr)) return arr;
+    return [];
+  } catch (err) {
+    try {
+      const start = text.indexOf('[');
+      const end = text.lastIndexOf(']');
+      if (start !== -1 && end !== -1) {
+        const substring = text.slice(start, end + 1);
+        const arr = JSON.parse(substring);
+        if (Array.isArray(arr)) return arr;
+      }
+    } catch (_) {}
+    return [];
+  }
+}
+
+function extractAnthropic(text, apiKey) {
+  return new Promise((resolve, reject) => {
+    const payload = JSON.stringify({
+      model: 'claude-3-5-sonnet-20241022',
+      max_tokens: 1000,
+      system: EXTRACTION_SYSTEM_PROMPT,
+      messages: [
+        { role: 'user', content: `Extract facts from this transcript:\n\n${text}` }
+      ]
+    });
+
+    const req = https.request({
+      hostname: 'api.anthropic.com',
+      port: 443,
+      path: '/v1/messages',
+      method: 'POST',
+      headers: {
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01',
+        'content-type': 'application/json',
+        'content-length': Buffer.byteLength(payload)
+      },
+      timeout: 8000
+    });
+
+    req.on('response', (res) => {
+      let data = '';
+      res.on('data', chunk => { data += chunk; });
+      res.on('end', () => {
+        try {
+          const parsed = JSON.parse(data);
+          if (res.statusCode !== 200) {
+            reject(new Error(`Anthropic error: ${parsed.error?.message || data}`));
+            return;
+          }
+          const contentText = parsed.content?.[0]?.text || '';
+          resolve(parseJsonArray(contentText));
+        } catch (e) {
+          reject(e);
+        }
+      });
+    });
+
+    req.on('error', reject);
+    req.on('timeout', () => { req.destroy(); reject(new Error('Anthropic timeout')); });
+    req.write(payload);
+    req.end();
+  });
+}
+
+function extractOpenAI(text, apiKey) {
+  return new Promise((resolve, reject) => {
+    const payload = JSON.stringify({
+      model: 'gpt-4o-mini',
+      messages: [
+        { role: 'system', content: EXTRACTION_SYSTEM_PROMPT },
+        { role: 'user', content: `Extract facts from this transcript:\n\n${text}` }
+      ],
+      response_format: { type: 'json_object' }
+    });
+
+    const req = https.request({
+      hostname: 'api.openai.com',
+      port: 443,
+      path: '/v1/chat/completions',
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+        'Content-Length': Buffer.byteLength(payload)
+      },
+      timeout: 8000
+    });
+
+    req.on('response', (res) => {
+      let data = '';
+      res.on('data', chunk => { data += chunk; });
+      res.on('end', () => {
+        try {
+          const parsed = JSON.parse(data);
+          if (res.statusCode !== 200) {
+            reject(new Error(`OpenAI error: ${parsed.error?.message || data}`));
+            return;
+          }
+          const contentText = parsed.choices?.[0]?.message?.content || '';
+          let obj = JSON.parse(contentText);
+          if (Array.isArray(obj)) {
+            resolve(obj);
+          } else if (obj && typeof obj === 'object') {
+            const key = Object.keys(obj).find(k => Array.isArray(obj[k]));
+            if (key) {
+              resolve(obj[key]);
+            } else {
+              resolve([]);
+            }
+          } else {
+            resolve([]);
+          }
+        } catch (e) {
+          reject(e);
+        }
+      });
+    });
+
+    req.on('error', reject);
+    req.on('timeout', () => { req.destroy(); reject(new Error('OpenAI timeout')); });
+    req.write(payload);
+    req.end();
+  });
+}
+
+function extractOllama(text, model) {
+  return new Promise((resolve, reject) => {
+    const payload = JSON.stringify({
+      model: model,
+      messages: [
+        { role: 'system', content: EXTRACTION_SYSTEM_PROMPT },
+        { role: 'user', content: `Extract facts from this transcript:\n\n${text}` }
+      ],
+      stream: false,
+      format: 'json'
+    });
+
+    const req = http.request({
+      hostname: '127.0.0.1',
+      port: 11434,
+      path: '/api/chat',
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Content-Length': Buffer.byteLength(payload)
+      },
+      timeout: 12000
+    });
+
+    req.on('response', (res) => {
+      let data = '';
+      res.on('data', chunk => { data += chunk; });
+      res.on('end', () => {
+        try {
+          if (res.statusCode !== 200) {
+            reject(new Error(`Ollama error: status ${res.statusCode}`));
+            return;
+          }
+          const parsed = JSON.parse(data);
+          const contentText = parsed.message?.content || '';
+          let obj = JSON.parse(contentText);
+          if (Array.isArray(obj)) {
+            resolve(obj);
+          } else if (obj && typeof obj === 'object') {
+            const key = Object.keys(obj).find(k => Array.isArray(obj[k]));
+            if (key) {
+              resolve(obj[key]);
+            } else {
+              resolve([]);
+            }
+          } else {
+            resolve([]);
+          }
+        } catch (e) {
+          reject(e);
+        }
+      });
+    });
+
+    req.on('error', reject);
+    req.on('timeout', () => { req.destroy(); reject(new Error('Ollama timeout')); });
+    req.write(payload);
+    req.end();
+  });
+}
+
+function checkOllamaAlive() {
+  return new Promise((resolve) => {
+    const req = http.request({
+      hostname: '127.0.0.1',
+      port: 11434,
+      path: '/api/tags',
+      method: 'GET',
+      timeout: 1000
+    });
+
+    req.on('response', (res) => {
+      if (res.statusCode === 200) {
+        let data = '';
+        res.on('data', chunk => { data += chunk; });
+        res.on('end', () => {
+          try {
+            const parsed = JSON.parse(data);
+            const models = parsed.models || [];
+            resolve({ alive: true, models: models.map(m => m.name) });
+          } catch (_) {
+            resolve({ alive: true, models: [] });
+          }
+        });
+      } else {
+        resolve({ alive: false });
+      }
+    });
+
+    req.on('error', () => {
+      resolve({ alive: false });
+    });
+
+    req.on('timeout', () => {
+      req.destroy();
+      resolve({ alive: false });
+    });
+
+    req.end();
+  });
+}
+
+async function extractFacts(text) {
+  // Try Anthropic first
+  if (process.env.ANTHROPIC_API_KEY) {
+    try {
+      log('INFO', 'Attempting Anthropic fact extraction...');
+      const facts = await extractAnthropic(text, process.env.ANTHROPIC_API_KEY);
+      log('INFO', `Anthropic extraction succeeded: extracted ${facts.length} facts.`);
+      return { facts, tier: 'anthropic' };
+    } catch (err) {
+      log('WARN', `Anthropic extraction failed: ${err.message}`);
+    }
+  }
+
+  // Try OpenAI second
+  if (process.env.OPENAI_API_KEY) {
+    try {
+      log('INFO', 'Attempting OpenAI fact extraction...');
+      const facts = await extractOpenAI(text, process.env.OPENAI_API_KEY);
+      log('INFO', `OpenAI extraction succeeded: extracted ${facts.length} facts.`);
+      return { facts, tier: 'openai' };
+    } catch (err) {
+      log('WARN', `OpenAI extraction failed: ${err.message}`);
+    }
+  }
+
+  // Try Ollama third
+  try {
+    const ollamaStatus = await checkOllamaAlive();
+    if (ollamaStatus.alive && ollamaStatus.models && ollamaStatus.models.length > 0) {
+      const targetModel = ollamaStatus.models.find(m => m.includes('qwen') || m.includes('coder') || m.includes('llama')) || ollamaStatus.models[0];
+      if (targetModel) {
+        log('INFO', `Attempting Ollama extraction using model: ${targetModel}...`);
+        const facts = await extractOllama(text, targetModel);
+        log('INFO', `Ollama extraction succeeded: extracted ${facts.length} facts.`);
+        return { facts, tier: \`ollama:\${targetModel}\` };
+      }
+    }
+  } catch (err) {
+    log('WARN', `Ollama extraction failed: ${err.message}`);
+  }
+
+  // Fallback to Heuristic
+  log('INFO', 'All LLM extraction options unavailable/failed. Falling back to Heuristic extraction.');
+  try {
+    const { extractHeuristic } = await import('../src/extractor-heuristic.js');
+    const heuristicFacts = extractHeuristic(text);
+    return { facts: heuristicFacts, tier: 'heuristic' };
+  } catch (err) {
+    log('ERROR', `Heuristic extraction fallback failed: ${err.message}`);
+    return { facts: [], tier: 'failed' };
+  }
+}
 
 
 
@@ -285,21 +612,10 @@ async function main() {
       try {
         log('INFO', `Processing: ${filename} (retry: ${retryCount})`);
 
-        const facts = [];
-        let heuristicFacts = [];
+        const { facts: extractedFacts, tier } = await extractFacts(data.text);
+        const facts = extractedFacts.map(f => ({ ...f, tier }));
 
-        // 1. Run Tier 2 Heuristic Extraction (always safe, zero cost)
-        try {
-          const { extractHeuristic } = await import('../src/extractor-heuristic.js');
-          heuristicFacts = extractHeuristic(data.text);
-          for (const f of heuristicFacts) {
-            facts.push({ ...f, tier: 'heuristic' });
-          }
-        } catch (heurErr) {
-          log('ERROR', `Heuristic extraction failed: ${heurErr.message}`);
-        }
-
-        log('INFO', `Extracted ${facts.length} heuristic fact(s)`);
+        log('INFO', `Extracted ${facts.length} fact(s) using tier: ${tier}`);
 
         // Deduplicate facts within this run
         const uniqueFacts = [];

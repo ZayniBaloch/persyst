@@ -61,6 +61,12 @@ const HOOK_CONFIG = {
       matcher: '',
       hooks: [{ ...HOOK_ENTRY, timeout: 10 }]
     }
+  ],
+  Stop: [
+    {
+      matcher: '',
+      hooks: [{ ...HOOK_ENTRY }]
+    }
   ]
 };
 

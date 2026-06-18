@@ -47,7 +47,7 @@
     <!-- Hero Section -->
     <section class="hero">
       <div class="container hero-content">
-        <div class="badge">v2.2.1 Now available on npm</div>
+        <div class="badge">v2.2.2 Now available on npm</div>
         <h1>Context that <span>persists.</span></h1>
         <p class="subtitle">
           A local-first, zero-egress memory server for coding agents. Retain context across sessions, detect semantic contradictions, and verify history with absolute privacy.
@@ -72,12 +72,12 @@
         <!-- Metrics Row -->
         <div class="metrics">
           <div class="metric-card">
-            <span class="metric-value">&lt;50ms</span>
+            <span class="metric-value">&lt;60ms</span>
             <span class="metric-label">Memory Ingest</span>
           </div>
           <div class="metric-card">
-            <span class="metric-value">&lt;20ms</span>
-            <span class="metric-label">Semantic Query</span>
+            <span class="metric-value">~3ms</span>
+            <span class="metric-label">HTTP Context Query</span>
           </div>
           <div class="metric-card">
             <span class="metric-value">50MB</span>
@@ -167,6 +167,15 @@
             </div>
             <h3>Swarm Namespace Isolation</h3>
             <p>Isolates private states for different agents in a swarm, while maintaining shared global access to project-level milestones and configs.</p>
+          </div>
+
+          <div class="feature-card">
+            <div class="feature-header">
+              <div class="feature-icon icon-indigo"><i data-feather="cpu"></i></div>
+              <span class="tech-tag">REST API / Port 4321</span>
+            </div>
+            <h3>Local HTTP Gateway</h3>
+            <p>Exposes a zero-dependency local HTTP server. Delivers sub-3ms prompt context injections and enables seamless integration with crew/swarm frameworks.</p>
           </div>
 
         </div>

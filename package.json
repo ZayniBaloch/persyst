@@ -4,6 +4,10 @@
   "description": "Local-first MCP memory server with hybrid keyword + semantic search for coding agents",
   "type": "module",
   "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./sdk": "./src/sdk.js"
+  },
   "bin": {
     "persyst-mcp": "index.js",
     "persyst-setup": "bin/setup.js",

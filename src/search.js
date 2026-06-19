@@ -246,7 +246,7 @@ function jaccardSimilarity(a, b) {
  * @param {string|null} agentId - Querying agent identifier
  * @param {string|null} sessionId - Current session ID
  */
-export async function getOptimizedContext(queryText, maxTokens, agentId = null, sessionId = null, namespace = null) {
+export async function getOptimizedContext(queryText, maxTokens, agentId = null, sessionId = null, namespace = null, intentParam = null) {
   // Extract entities mentioned in the query text to seed the graph search directly
   const entities = getAllEntities(100);
   const matchedEntityIds = new Set();
@@ -423,8 +423,23 @@ export async function getOptimizedContext(queryText, maxTokens, agentId = null, 
     accepted.push(c);
   }
 
+  // Classify intent and urgency based on query text and parameters
+  const { intent, urgency } = classifyIntentAndUrgency(queryText, intentParam);
+  const suggested_actions = generateSuggestedActions(accepted, intent, urgency);
+
   // 6. Format LLM injection context string
   let context = '=== RETRIEVED AGENT MEMORY CONTEXT ===\n';
+  context += `[Intent: ${intent} | Urgency: ${urgency}]\n\n`;
+
+  if (suggested_actions.length > 0) {
+    context += '[Suggested Actions]\n';
+    for (const action of suggested_actions) {
+      context += `• ${action}\n`;
+    }
+    context += '\n';
+  }
+
+  context += '[Memories]\n';
   if (accepted.length === 0) {
     context += 'No relevant memories retrieved.\n';
   } else {
@@ -447,7 +462,10 @@ export async function getOptimizedContext(queryText, maxTokens, agentId = null, 
   return {
     context,
     memories: accepted,
-    attestation
+    attestation,
+    intent,
+    urgency,
+    suggested_actions
   };
 }
 
@@ -630,4 +648,76 @@ export async function consolidateMemories(namespace = null) {
     consolidated_groups: consolidated.length,
     details: consolidated
   };
+}
+
+/**
+ * Classify context retrieval intent and urgency level using heuristic analysis.
+ */
+function classifyIntentAndUrgency(queryText, intentParam = null) {
+  const queryLower = (queryText || '').toLowerCase();
+  
+  // 1. Determine Intent
+  let intent = intentParam || 'general';
+  if (intent === 'general' || !intent) {
+    if (/(?:db|database|sqlite|sql|table|migration|schema)/i.test(queryLower)) {
+      intent = 'database_management';
+    } else if (/(?:deploy|ci|cd|vercel|publish|release|prod|staging)/i.test(queryLower)) {
+      intent = 'deployment';
+    } else if (/(?:style|css|html|theme|design|layout|align|color|font)/i.test(queryLower)) {
+      intent = 'ui_styling';
+    } else if (/(?:test|spec|unit|mock|heavy|smoke)/i.test(queryLower)) {
+      intent = 'testing';
+    } else if (/(?:error|bug|fail|crash|break|exception|stack|trace|refused|debug)/i.test(queryLower)) {
+      intent = 'debugging';
+    }
+  }
+
+  // 2. Determine Urgency
+  let urgency = 'low';
+  if (/(?:panic|emergency|broken|critical|urgent|fatal|security|leak|bypass|vulnerability)/i.test(queryLower)) {
+    urgency = 'critical';
+  } else if (/(?:fail|error|crash|prevent|stop|warn|warning|issue|broken)/i.test(queryLower)) {
+    urgency = 'high';
+  } else if (/(?:update|change|add|tweak|check|verify)/i.test(queryLower)) {
+    urgency = 'medium';
+  }
+
+  return { intent, urgency };
+}
+
+/**
+ * Generate actionable suggested actions based on active memories and query classification.
+ */
+function generateSuggestedActions(memories, intent, urgency) {
+  const actions = [];
+
+  // General recommendation based on intent
+  if (intent === 'debugging') {
+    actions.push('Inspect the recent error logs and verify SQLite/system constraints.');
+  } else if (intent === 'ui_styling') {
+    actions.push('Verify UI layouts conform to user design preferences.');
+  } else if (intent === 'database_management') {
+    actions.push('Ensure database migrations are applied and referential integrity is checked.');
+  }
+
+  for (const m of memories) {
+    const content = m.content.toLowerCase();
+    
+    // Check for rules/decisions in memory content
+    if (content.includes('decision:') || content.includes('rule:')) {
+      actions.push(`Adhere to guideline: ${m.content.slice(0, 100)}...`);
+    } else if (content.includes('prefer')) {
+      actions.push(`Apply user preference: ${m.content.slice(0, 100)}...`);
+    } else if (content.includes('error') || content.includes('bug') || content.includes('fix')) {
+      actions.push(`Reference past fix: ${m.content.slice(0, 100)}...`);
+    }
+  }
+
+  // Safety guideline if critical
+  if (urgency === 'critical') {
+    actions.unshift('CAUTION: Address security, vulnerability, or critical stability factors immediately.');
+  }
+
+  // Deduplicate
+  return Array.from(new Set(actions));
 }

@@ -31,11 +31,13 @@ export async function startServer() {
   const registeredCount = registerTools(server);
   console.error(`[persyst] ${registeredCount} tools registered ✓`);
 
-  // --- Start background log watcher daemon ---
-  startWatcher();
+  // --- Start background log watcher daemon (skip in test mode) ---
+  if (process.env.NODE_ENV !== 'test') {
+    startWatcher();
+  }
 
   // --- Start local HTTP Gateway (port 4321) ---
-  const httpPort = 4321;
+  const httpPort = parseInt(process.env.PORT || '4321', 10);
   const httpServer = http.createServer((req, res) => {
     // CORS headers for local swarms and browser testing
     res.setHeader('Access-Control-Allow-Origin', '*');
@@ -91,13 +93,13 @@ export async function startServer() {
         }
 
         if (req.url === '/context') {
-          const { query, max_tokens = 2000, agent_id, session_id } = payload;
+          const { query, max_tokens = 2000, agent_id, session_id, intent } = payload;
           if (!query) {
             res.writeHead(400, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ error: 'Missing required field: query' }));
             return;
           }
-          const context = await getOptimizedContext(query, max_tokens, agent_id, session_id);
+          const context = await getOptimizedContext(query, max_tokens, agent_id, session_id, agent_id || null, intent);
           res.writeHead(200, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify(context));
           return;

@@ -778,12 +778,13 @@ export function registerTools(server) {
       query: z.string().describe('The search query context'),
       max_tokens: z.number().default(4000).describe('Token budget for LLM context compression (default: 4000)'),
       agent_id: z.string().optional().describe('Agent ID requesting context — filters to this agent\'s namespace + shared'),
-      session_id: z.string().optional().describe('Session ID')
+      session_id: z.string().optional().describe('Session ID'),
+      intent: z.string().optional().describe('The active task intent / category (e.g. debugging, ui_styling, database_management)')
     },
-    async ({ query, max_tokens, agent_id, session_id }) => {
+    async ({ query, max_tokens, agent_id, session_id, intent }) => {
       try {
         const namespace = agent_id || null;
-        const contextData = await getOptimizedContext(query, max_tokens, agent_id, session_id, namespace);
+        const contextData = await getOptimizedContext(query, max_tokens, agent_id, session_id, namespace, intent);
         return text(contextData);
       } catch (err) {
         return text({ error: err.message });

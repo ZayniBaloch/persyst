@@ -33,6 +33,12 @@ let lastDataVersion = 0;
  * @returns {Promise<Array>} Ranked search results (with .attestation property attached)
  */
 export async function searchHybrid(queryText, limit = 5, agentId = null, sessionId = null, namespace = null, skipAttestation = false) {
+  if (typeof limit !== 'number' || isNaN(limit) || limit <= 0) {
+    throw new Error('Limit must be a positive integer.');
+  }
+  const parsedLimit = Math.floor(limit);
+  const ns = namespace || 'shared';
+
   // Sync in-memory cache with external DB changes using sqlite data_version
   try {
     const currentDataVersion = db.pragma('data_version', { simple: true });
@@ -46,7 +52,7 @@ export async function searchHybrid(queryText, limit = 5, agentId = null, session
 
   // --- Check LRU cache first (Feature 1) ---
   // Include namespace in cache key to prevent cross-namespace cache hits
-  const cacheKey = LRUCache.key(`${namespace || 'all'}:${queryText}`, limit);
+  const cacheKey = LRUCache.key(`${ns}:${queryText}`, parsedLimit);
   const cached = searchCache.get(cacheKey);
   if (cached) {
     console.error(`[persyst-cache] Cache HIT for query: "${queryText.slice(0, 50)}..."`);
@@ -54,12 +60,12 @@ export async function searchHybrid(queryText, limit = 5, agentId = null, session
   }
 
   // --- Step 1: Keyword search (fast, exact matches) ---
-  const keywordHits = searchKeyword(queryText, limit * 2);
+  const keywordHits = searchKeyword(queryText, parsedLimit * 2);
   const keywordIds = new Set(keywordHits.map(r => r.id));
 
   // --- Step 2: Semantic search (meaning-based) ---
   const queryEmbedding = await generateEmbedding(queryText);
-  const vecHits = searchVector(queryEmbedding, limit * 2);
+  const vecHits = searchVector(queryEmbedding, parsedLimit * 2);
 
   const semanticResults = vecHits.map(r => ({
     id: r.rowid,
@@ -99,7 +105,7 @@ export async function searchHybrid(queryText, limit = 5, agentId = null, session
   const finalResults = combined
     .map(r => {
       // Use namespace-aware getMemoryById to filter by agent namespace
-      const memory = getMemoryById(r.id, namespace);
+      const memory = getMemoryById(r.id, ns);
       if (!memory) return null; // Memory was archived, deleted, or not in namespace
 
       // Boost memory access metrics
@@ -141,7 +147,7 @@ export async function searchHybrid(queryText, limit = 5, agentId = null, session
   finalResults.sort((a, b) => parseFloat(b.hybrid_score) - parseFloat(a.hybrid_score));
 
   // --- Step 5: Apply MMR for diverse retrieval (Feature 3) ---
-  const mmrResults = applyMMR(finalResults, limit);
+  const mmrResults = applyMMR(finalResults, parsedLimit);
 
   // Generate cryptographic attestation for audit trails (skip if called internally)
   let attestation = null;

@@ -1,6 +1,6 @@
 {
   "name": "persyst-mcp",
-  "version": "2.2.3",
+  "version": "2.2.4",
   "description": "Local-first MCP memory server with hybrid keyword + semantic search for coding agents",
   "type": "module",
   "main": "index.js",

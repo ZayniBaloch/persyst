@@ -323,13 +323,13 @@ const stmts = {
   boost: db.prepare(`
     UPDATE memories
     SET access_count    = access_count + 1,
-        importance_score = MIN(importance_score + 0.1, 2.0),
+        importance_score = ROUND(MIN(importance_score + 0.1, 1.0), 4),
         last_accessed   = unixepoch()
     WHERE id = ?
   `),
   decay: db.prepare(`
     UPDATE memories
-    SET importance_score = importance_score * 0.95
+    SET importance_score = ROUND(MAX(importance_score * 0.95, 0.0), 4)
     WHERE (? - last_accessed) > 604800
   `),
 
@@ -443,7 +443,8 @@ export function insertMemory(content, importance = 1.0, provenanceInfo = null, n
   if (content && content.length > 10000) {
     throw new Error('Memory content exceeds maximum length of 10000 characters.');
   }
-  const result = stmts.insertMemory.run(content, importance, namespace || 'shared', parentId);
+  const clampedImportance = Math.max(0.0, Math.min(1.0, Math.round(importance * 10000) / 10000));
+  const result = stmts.insertMemory.run(content, clampedImportance, namespace || 'shared', parentId);
   const id = Number(result.lastInsertRowid);
 
   // Provenance Info handling
@@ -510,9 +511,10 @@ export function getAnyMemoryById(id) {
  * @returns {object|null} The memory row, or null if not found
  */
 export function getMemoryById(id, namespace = null) {
-  const memory = namespace
-    ? stmts.getByIdNs.get(id, namespace)
-    : stmts.getById.get(id);
+  const ns = namespace || 'shared';
+  const memory = ns === 'all'
+    ? stmts.getById.get(id)
+    : stmts.getByIdNs.get(id, ns);
   if (memory) {
     memory.provenance = getProvenance(id);
   }
@@ -557,12 +559,17 @@ export function deleteMemory(id) {
 /**
  * Get the N most recently created memories.
  * @param {number} limit - Max results
- * @param {string|null} namespace - Namespace filter (null = all)
+ * @param {string|null} namespace - Namespace filter (null = shared)
  */
 export function getRecentMemories(limit = 10, namespace = null) {
-  const rows = namespace
-    ? stmts.getRecentNs.all(namespace, limit)
-    : stmts.getRecent.all(limit);
+  if (typeof limit !== 'number' || isNaN(limit) || limit <= 0) {
+    throw new Error('Limit must be a positive integer.');
+  }
+  const parsedLimit = Math.floor(limit);
+  const ns = namespace || 'shared';
+  const rows = ns === 'all'
+    ? stmts.getRecent.all(parsedLimit)
+    : stmts.getRecentNs.all(ns, parsedLimit);
   rows.forEach(r => {
     r.provenance = getProvenance(r.id);
   });
@@ -572,12 +579,17 @@ export function getRecentMemories(limit = 10, namespace = null) {
 /**
  * Get the N most important memories (by importance_score).
  * @param {number} limit - Max results
- * @param {string|null} namespace - Namespace filter (null = all)
+ * @param {string|null} namespace - Namespace filter (null = shared)
  */
 export function getImportantMemories(limit = 10, namespace = null) {
-  const rows = namespace
-    ? stmts.getImportantNs.all(namespace, limit)
-    : stmts.getImportant.all(limit);
+  if (typeof limit !== 'number' || isNaN(limit) || limit <= 0) {
+    throw new Error('Limit must be a positive integer.');
+  }
+  const parsedLimit = Math.floor(limit);
+  const ns = namespace || 'shared';
+  const rows = ns === 'all'
+    ? stmts.getImportant.all(parsedLimit)
+    : stmts.getImportantNs.all(ns, parsedLimit);
   rows.forEach(r => {
     r.provenance = getProvenance(r.id);
   });
@@ -633,7 +645,11 @@ export function searchKeyword(query, limit = 10) {
  * @returns {Array<{rowid: number, distance: number}>}
  */
 export function searchVector(embedding, limit = 10) {
-  return stmts.searchVec.all(Buffer.from(embedding.buffer), limit);
+  if (typeof limit !== 'number' || isNaN(limit) || limit <= 0) {
+    throw new Error('Limit must be a positive integer.');
+  }
+  const parsedLimit = Math.floor(limit);
+  return stmts.searchVec.all(Buffer.from(embedding.buffer), parsedLimit);
 }
 
 // ============================================================

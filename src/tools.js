@@ -290,7 +290,7 @@ export function registerTools(server) {
     'Search memories using hybrid keyword + semantic search with cryptographic attestation. CRITICAL: Call this tool at the start of a session or task to retrieve relevant user preferences, coding guidelines, and past decisions.',
     {
       query: z.string().describe('What to search for'),
-      limit: z.number().default(5).describe('Max results (default: 5)'),
+      limit: z.number().int().min(1).default(5).describe('Max results (default: 5)'),
       agent_id: z.string().optional().describe('Agent ID — filters results to this agent\'s namespace + shared'),
       session_id: z.string().optional().describe('Session ID')
     },
@@ -415,7 +415,7 @@ export function registerTools(server) {
     'get_recent_memories',
     'Get the most recently created memories, newest first. Filtered by agent namespace if agent_id is provided.',
     {
-      limit: z.number().default(10).describe('How many to return (default: 10)'),
+      limit: z.number().int().min(1).default(10).describe('How many to return (default: 10)'),
       agent_id: z.string().optional().describe('Agent ID — filters to this agent\'s namespace + shared')
     },
     async ({ limit, agent_id }) => {
@@ -434,7 +434,7 @@ export function registerTools(server) {
     'get_important_memories',
     'Get memories ranked by importance score, highest first. Filtered by agent namespace if agent_id is provided.',
     {
-      limit: z.number().default(10).describe('How many to return (default: 10)'),
+      limit: z.number().int().min(1).default(10).describe('How many to return (default: 10)'),
       agent_id: z.string().optional().describe('Agent ID — filters to this agent\'s namespace + shared')
     },
     async ({ limit, agent_id }) => {

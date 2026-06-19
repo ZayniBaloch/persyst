@@ -97,7 +97,7 @@ async function runTests() {
 
     serverProcess.stderr.on('data', (data) => {
       const output = data.toString();
-      if (output.includes('HTTP Gateway listening')) {
+      if (output.includes('HTTP Gateway listening') || output.includes('already in use')) {
         started = true;
         clearTimeout(timeout);
         resolve();

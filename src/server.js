@@ -132,6 +132,14 @@ export async function startServer() {
     });
   });
 
+  httpServer.on('error', (err) => {
+    if (err.code === 'EADDRINUSE') {
+      console.error(`[persyst] HTTP Gateway port ${httpPort} is already in use. Stdio MCP server will continue running.`);
+    } else {
+      console.error('[persyst] HTTP Gateway error:', err.message);
+    }
+  });
+
   httpServer.listen(httpPort, '127.0.0.1', () => {
     console.error(`[persyst] HTTP Gateway listening on http://127.0.0.1:${httpPort} ✓`);
   });

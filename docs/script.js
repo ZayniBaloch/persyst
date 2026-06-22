@@ -114,8 +114,7 @@ document.addEventListener('DOMContentLoaded', () => {
   
   if (themeToggle) {
     const savedTheme = localStorage.getItem('theme');
-    const systemPrefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-    const initialTheme = savedTheme || (systemPrefersDark ? 'dark' : 'light');
+    const initialTheme = savedTheme || 'light';
     
     setTheme(initialTheme);
     

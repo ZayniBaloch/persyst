@@ -33,6 +33,7 @@
         <a href="#why-persyst">Why Persyst?</a>
         <a href="#terminal-sandbox">Interactive Sandbox</a>
         <a href="#getting-started">Setup</a>
+        <a href="#developer-sdk">Developer SDK &amp; API</a>
         <button id="theme-toggle" class="btn-theme" aria-label="Toggle theme">
           <i data-feather="sun" class="theme-icon"></i>
         </button>
@@ -249,6 +250,9 @@
             <button class="sandbox-btn" data-terminal="term-audit">
               <i data-feather="key" class="icon-sm"></i> Cryptographic Audit
             </button>
+            <button class="sandbox-btn" data-terminal="term-remember">
+              <i data-feather="pocket" class="icon-sm"></i> /remember (Direct Bypass)
+            </button>
           </div>
 
           <div class="code-window">
@@ -323,6 +327,25 @@
   }
 }</div>
                 <div class="line mt-1 success"><i data-feather="check" class="icon-sm" style="vertical-align: text-bottom;"></i> Signature chain verified successfully. Factual lineage is untampered.</div>
+              </div>
+
+              <!-- Pane 4: Remember -->
+              <div id="term-remember" class="terminal-pane">
+                <div class="line comment">// Save explicit fact directly without keyword restrictions</div>
+                <div class="line json-req"><span class="terminal-kw">POST</span> /remember</div>
+                <div class="line text-body" style="color: #f1f5f9;">Remember: SSL certificate expires March 15</div>
+                <div class="line mt-1 system">System: Bypassing cognitive noise filter. Ingestion complete (4ms)</div>
+                <div class="line json-resp">{
+  <span class="json-key">"success"</span>: <span class="json-val">true</span>,
+  <span class="json-key">"message"</span>: <span class="json-val">"Memory saved directly via explicit /remember endpoint."</span>,
+  <span class="json-key">"id"</span>: <span class="json-val">42</span>,
+  <span class="json-key">"memory"</span>: {
+    <span class="json-key">"content"</span>: <span class="json-val">"Note: SSL certificate expires March 15"</span>,
+    <span class="json-key">"category"</span>: <span class="json-val">"note"</span>,
+    <span class="json-key">"importance"</span>: <span class="json-val">1.0</span>,
+    <span class="json-key">"confidence"</span>: <span class="json-val">0.95</span>
+  }
+}</div>
               </div>
             </div>
           </div>
@@ -456,6 +479,98 @@ c:\Users\Super\Desktop\Peryst\index.js</code></pre>
                 </ol>
               </div>
               <div class="note">This uses the <code>cross-env</code> package to redirect Qwen's internal Bun runtime to launch your system Node.js directly, bypassing Windows path isolation issues.</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Developer SDK & API Section -->
+    <section id="developer-sdk" class="sdk-section">
+      <div class="container">
+        <h2 class="section-title">Developer <span>SDK &amp; REST API</span></h2>
+        <p class="section-desc">Build programmatic integrations using our first-party Node.js SDK and zero-dependency HTTP Gateway.</p>
+        
+        <div class="sdk-tabs-container">
+          <div class="sdk-tabs-header">
+            <button class="sdk-tab-btn active" data-sdk-tab="sdk-tab-js">Node.js SDK</button>
+            <button class="sdk-tab-btn" data-sdk-tab="sdk-tab-http">REST API</button>
+          </div>
+          <div class="sdk-tabs-content">
+            <!-- Node.js SDK Tab -->
+            <div id="sdk-tab-js" class="sdk-tab-pane active">
+              <p class="config-desc">Install the package locally in your project:</p>
+              <div class="code-wrapper">
+                <pre><code id="code-sdk-install">npm install persyst-mcp</code></pre>
+                <button class="copy-code-btn" data-clipboard="code-sdk-install" aria-label="Copy code"><i data-feather="copy" class="icon-sm"></i></button>
+              </div>
+              
+              <p class="config-desc" style="margin-top: 1.5rem;">Initialize the SDK in <strong>Library Mode</strong> (runs local SQLite-vec engine offline) or <strong>Gateway Mode</strong> (connects to running HTTP gateway):</p>
+              <div class="code-wrapper">
+                <pre><code id="code-sdk-usage">import { PersystSDK } from 'persyst-mcp/sdk';
+
+// 1. Library Mode (Offline Direct access)
+const sdk = new PersystSDK({
+  mode: 'library',
+  dbPath: './db/memory.db'
+});
+
+// 2. Gateway Mode (Connect to HTTP Server)
+const sdk = new PersystSDK({
+  mode: 'gateway',
+  host: '127.0.0.1',
+  port: 4322
+});
+
+// Ingest a new memory
+const result = await sdk.addMemory({
+  content: "User prefers dark mode for all dashboards.",
+  agentId: "agent-alpha",
+  sessionId: "session-100",
+  shared: true
+});
+
+// Retrieve optimized pre-prompt context injected with facts
+const context = await sdk.getContext({
+  query: "Theme configuration",
+  agentId: "agent-alpha",
+  maxTokens: 2000
+});
+
+console.log(context.context_prompt);</code></pre>
+                <button class="copy-code-btn" data-clipboard="code-sdk-usage" aria-label="Copy code"><i data-feather="copy" class="icon-sm"></i></button>
+              </div>
+            </div>
+            
+            <!-- REST API Tab -->
+            <div id="sdk-tab-http" class="sdk-tab-pane">
+              <p class="config-desc">Integrate with any programming language using zero-dependency HTTP endpoints:</p>
+              
+              <h4 class="endpoint-title"><span class="badge-method post">POST</span> <code>/remember</code> <span class="endpoint-desc">&mdash; Bypasses cognitive noise filter for explicit user commands</span></h4>
+              <div class="code-wrapper">
+                <pre><code id="code-api-remember">curl -X POST http://127.0.0.1:4322/remember \
+     -H "Content-Type: text/plain" \
+     -d "Remember to backup sqlite database every night at 2 AM"</code></pre>
+                <button class="copy-code-btn" data-clipboard="code-api-remember" aria-label="Copy code"><i data-feather="copy" class="icon-sm"></i></button>
+              </div>
+
+              <h4 class="endpoint-title" style="margin-top: 2rem;"><span class="badge-method post">POST</span> <code>/context</code> <span class="endpoint-desc">&mdash; Fetch optimized context prompt for LLM injection</span></h4>
+              <div class="code-wrapper">
+                <pre><code id="code-api-context">curl -X POST http://127.0.0.1:4322/context \
+     -H "Content-Type: application/json" \
+     -d '{
+       "query": "deployment timezone",
+       "max_tokens": 1500,
+       "agent_id": "agent-alpha"
+     }'</code></pre>
+                <button class="copy-code-btn" data-clipboard="code-api-context" aria-label="Copy code"><i data-feather="copy" class="icon-sm"></i></button>
+              </div>
+
+              <h4 class="endpoint-title" style="margin-top: 2rem;"><span class="badge-method get">GET</span> <code>/health</code> <span class="endpoint-desc">&mdash; Check server status and active memory count</span></h4>
+              <div class="code-wrapper">
+                <pre><code id="code-api-health">curl http://127.0.0.1:4322/health</code></pre>
+                <button class="copy-code-btn" data-clipboard="code-api-health" aria-label="Copy code"><i data-feather="copy" class="icon-sm"></i></button>
+              </div>
             </div>
           </div>
         </div>

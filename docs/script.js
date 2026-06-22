@@ -82,7 +82,8 @@ document.addEventListener('DOMContentLoaded', () => {
   const fileMap = {
     'term-query': 'mcp-rpc-request.json',
     'term-contradict': 'mcp-rpc-response.json',
-    'term-audit': 'verify-attestation.log'
+    'term-audit': 'verify-attestation.log',
+    'term-remember': 'remember-bypass.log'
   };
 
   sandboxBtns.forEach(btn => {
@@ -138,4 +139,26 @@ document.addEventListener('DOMContentLoaded', () => {
       feather.replace();
     }
   }
+
+  // ==========================================
+  // 6. Developer SDK Tab Switcher
+  // ==========================================
+  const sdkTabButtons = document.querySelectorAll('.sdk-tab-btn');
+  const sdkTabPanes = document.querySelectorAll('.sdk-tab-pane');
+
+  sdkTabButtons.forEach(btn => {
+    btn.addEventListener('click', () => {
+      // Deactivate all buttons & panes
+      sdkTabButtons.forEach(b => b.classList.remove('active'));
+      sdkTabPanes.forEach(p => p.classList.remove('active'));
+
+      // Activate selected button & pane
+      btn.classList.add('active');
+      const targetId = btn.getAttribute('data-sdk-tab');
+      const targetPane = document.getElementById(targetId);
+      if (targetPane) {
+        targetPane.classList.add('active');
+      }
+    });
+  });
 });

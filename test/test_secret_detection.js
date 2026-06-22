@@ -81,7 +81,64 @@ mQENBF2...
 -----END PGP PRIVATE KEY BLOCK-----`), '[REDACTED]');
   });
 
-  await t.test('9. Non-sensitive strings should NOT be redacted', () => {
+  await t.test('9. AWS Secret Key with slashes/plus/equals', () => {
+    const raw = 'aws_secret=wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY';
+    const expected = 'aws_secret=[REDACTED]';
+    assert.equal(redactSecrets(raw), expected);
+  });
+
+  await t.test('10. Database Connection Strings', () => {
+    assert.equal(
+      redactSecrets('mongodb://admin:password123@cluster0.example.net/db'),
+      'mongodb://admin:[REDACTED]@cluster0.example.net/db'
+    );
+    assert.equal(
+      redactSecrets('mongodb+srv://user:my+secret-pass@cluster.mongodb.net/test?retryWrites=true'),
+      'mongodb+srv://user:[REDACTED]@cluster.mongodb.net/test?retryWrites=true'
+    );
+    assert.equal(
+      redactSecrets('postgresql://postgres:secret_pass@localhost:5432/mydb'),
+      'postgresql://postgres:[REDACTED]@localhost:5432/mydb'
+    );
+    assert.equal(
+      redactSecrets('redis://:myredispassword@redis-server:6379'),
+      'redis://:[REDACTED]@redis-server:6379'
+    );
+  });
+
+  await t.test('11. SSH passphrase', () => {
+    const raw = 'ssh_passphrase=MySSHKeyPassphrase123';
+    const expected = 'ssh_passphrase=[REDACTED]';
+    assert.equal(redactSecrets(raw), expected);
+  });
+
+  await t.test('12. Password with all printable special characters', () => {
+    const raw = 'password=Test!@#$%^&*()_+-=[]{}|;\':",./<>?`~';
+    const expected = 'password=[REDACTED]';
+    assert.equal(redactSecrets(raw), expected);
+  });
+
+  await t.test('13. Quoted multiline secrets', () => {
+    const raw = `password="line1
+line2
+line3"`;
+    const expected = 'password="[REDACTED]"';
+    assert.equal(redactSecrets(raw), expected);
+  });
+
+  await t.test('14. URL with credentials preserves subdomain and path structure', () => {
+    const raw = 'https://user:password123@api.example.com/endpoint';
+    const expected = 'https://user:[REDACTED]@api.example.com/endpoint';
+    assert.equal(redactSecrets(raw), expected);
+  });
+
+  await t.test('15. Technical terms (Base64, SHA256, IPv4) should not be redacted', () => {
+    const raw = 'Base64-like string: password=SGVsbG8gV29ybGQ= with SHA256 and IPv4 address 127.0.0.1';
+    const expected = 'Base64-like string: password=[REDACTED] with SHA256 and IPv4 address 127.0.0.1';
+    assert.equal(redactSecrets(raw), expected);
+  });
+
+  await t.test('16. Non-sensitive strings should NOT be redacted', () => {
     const texts = [
       'The password reset flow was fixed.',
       'Always secure your api_key in dotenv files.',

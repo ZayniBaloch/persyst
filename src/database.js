@@ -443,20 +443,35 @@ export function redactSecrets(content) {
 
   let redacted = content;
 
-  // 1. Redact key-value pairs matching credentials (retaining key/operator, redacting value)
-  const kvRegex = /\b(api[_-]?key|secret[_-]?key|secret|password|passwd|pwd|auth[_-]?token|access[_-]?token|client[_-]?secret|private[_-]?key|auth|access|client|aws|gcp|google|stripe|github|openai|vercel|heroku|slack)\b\s*(?:key|token|secret|password|pwd|passwd|value|string|id)?\b\s*(?:[:=]|is|of|to|set\s+to|\(|\buses\b)\s*(?:['"]([^\n'"]{6,})['"]|([a-zA-Z0-9_\-\.\~@#$%^&*+=!/]{6,}))/gi;
-  
-  redacted = redacted.replace(kvRegex, (match, key, quotedVal, unquotedVal) => {
-    const val = quotedVal || unquotedVal;
+  // 1. Redact credentials in connection strings / URIs
+  // Matches scheme://user:pass@host and scheme://:pass@host
+  const connectionStringRegex = /\b([a-zA-Z0-9+.-]+:\/\/)([^/:\s]*):([^@/:\s]+)(@[^/\s]+)/gi;
+  redacted = redacted.replace(connectionStringRegex, (match, protocol, user, pass, host) => {
+    return protocol + user + ':[REDACTED]' + host;
+  });
+
+  // 2. Redact key-value pairs matching credentials (retaining key/operator, redacting value)
+  // Supports single-quoted, double-quoted, and unquoted values (non-whitespace).
+  const kvRegex = /\b(api[_-]?key|secret[_-]?key|secret|password|passwd|pwd|passphrase|auth[_-]?token|access[_-]?token|client[_-]?secret|private[_-]?key|auth|access|client|aws|gcp|google|stripe|github|openai|vercel|heroku|slack|ssh[_-]?(?:key|password|passphrase|pass)?|credential|aws_secret|secret_access_key|aws_access_key|ssh_passphrase|ssh_password|ssh_key_pass)\b\s*(?:key|token|secret|password|pwd|passwd|value|string|id)?\b\s*([:=]|is|of|to|set\s+to|\(|\buses\b)\s*(?:'([^']{6,2048})'|"([^"]{6,2048})"|([^\s]{6,}))/gi;
+
+  redacted = redacted.replace(kvRegex, (match, key, op, sqVal, dqVal, uqVal) => {
+    const val = sqVal || dqVal || uqVal;
     if (!val) return match;
-    const lastIdx = match.lastIndexOf(val);
+
+    // Strip trailing parenthesis if operator is '(' and value has trailing parenthesis
+    let cleanVal = val;
+    if (op === '(' && val.endsWith(')')) {
+      cleanVal = val.slice(0, -1);
+    }
+
+    const lastIdx = match.lastIndexOf(cleanVal);
     if (lastIdx !== -1) {
-      return match.slice(0, lastIdx) + '[REDACTED]' + match.slice(lastIdx + val.length);
+      return match.slice(0, lastIdx) + '[REDACTED]' + match.slice(lastIdx + cleanVal.length);
     }
     return match;
   });
 
-  // 2. Redact standalone common API keys and tokens
+  // 3. Redact standalone common API keys and tokens
   const standalonePatterns = [
     /\b(sk-[a-zA-Z0-9]{48})\b/g, // OpenAI
     /\b(sk-proj-[a-zA-Z0-9-]{40,})\b/g, // OpenAI project
@@ -475,15 +490,15 @@ export function redactSecrets(content) {
     redacted = redacted.replace(pattern, '[REDACTED]');
   }
 
-  // 3. Robust credential shape heuristic (independent of strict key-value punctuation)
-  const containsCredKeyword = /\b(password|passwd|pwd|secret|token|api|credential|auth)\b/i.test(redacted);
+  // 4. Robust credential shape heuristic (independent of strict key-value punctuation)
+  const containsCredKeyword = /\b(password|passwd|pwd|passphrase|pass|secret|token|api|credential|auth|ssh|aws)\b/i.test(redacted);
   if (containsCredKeyword) {
     // Match password-like tokens: length 6 to 64, containing both letters and digits/symbols
     const tokenRegex = /\b([a-zA-Z0-9_@#$%^&*+=!~\-]{6,64})\b/g;
     
     redacted = redacted.replace(tokenRegex, (match) => {
-      // Skip common query words and keywords
-      if (/^(password|passwd|pwd|secret|token|api|credential|auth|uses|with|key|from|here|what|have|this|that|your|same|then|want|more)$/i.test(match)) {
+      // Skip common query words and technical keywords
+      if (/^(password|passwd|pwd|passphrase|pass|secret|token|api|credential|auth|ssh|uses|with|key|from|here|what|have|this|that|your|same|then|want|more|base64|base64-like|base64-encoded|sha256|sha1|md5|aes256|aes128|utf8|utf-8|url|uri|ipv4|ipv6|http|https|sha-256|sha-1)$/i.test(match)) {
         return match;
       }
       

@@ -38,6 +38,14 @@ test('Secret Redaction on Write', async (t) => {
       redactSecrets('The AWS-key-shaped string (AKIAFAKEKEY9988776655) and the password (SuperSecret!2026)'),
       'The AWS-key-shaped string ([REDACTED]) and the password ([REDACTED])'
     );
+    assert.equal(
+      redactSecrets('the password uses Tr0ub4dor&3'),
+      'the password uses [REDACTED]'
+    );
+    assert.equal(
+      redactSecrets('our AWS key for X is AKIAQWERTYUIOP123456'),
+      'our AWS key for X is [REDACTED]'
+    );
   });
 
   await t.test('6. Non-sensitive strings should NOT be redacted', () => {

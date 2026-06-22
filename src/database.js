@@ -444,7 +444,7 @@ export function redactSecrets(content) {
   let redacted = content;
 
   // 1. Redact key-value pairs matching credentials (retaining key/operator, redacting value)
-  const kvRegex = /\b(api[_-]?key|secret[_-]?key|secret|password|passwd|pwd|auth[_-]?token|access[_-]?token|client[_-]?secret|private[_-]?key|auth|access|client|aws|gcp|google|stripe|github|openai|vercel|heroku|slack)\b\s*(?:key|token|secret|password|pwd|passwd|value|string|id)?\b\s*(?:[:=]|is|of|to|set\s+to|\()\s*(?:['"]([^\n'"]{6,})['"]|([a-zA-Z0-9_\-\.\~@#$%^&*+=!/]{6,}))/gi;
+  const kvRegex = /\b(api[_-]?key|secret[_-]?key|secret|password|passwd|pwd|auth[_-]?token|access[_-]?token|client[_-]?secret|private[_-]?key|auth|access|client|aws|gcp|google|stripe|github|openai|vercel|heroku|slack)\b\s*(?:key|token|secret|password|pwd|passwd|value|string|id)?\b\s*(?:[:=]|is|of|to|set\s+to|\(|\buses\b)\s*(?:['"]([^\n'"]{6,})['"]|([a-zA-Z0-9_\-\.\~@#$%^&*+=!/]{6,}))/gi;
   
   redacted = redacted.replace(kvRegex, (match, key, quotedVal, unquotedVal) => {
     const val = quotedVal || unquotedVal;
@@ -460,17 +460,45 @@ export function redactSecrets(content) {
   const standalonePatterns = [
     /\b(sk-[a-zA-Z0-9]{48})\b/g, // OpenAI
     /\b(sk-proj-[a-zA-Z0-9-]{40,})\b/g, // OpenAI project
-    /\b(ghp_[a-zA-Z0-9]{36})\b/g, // GitHub PAT
-    /\b(github_pat_[a-zA-Z0-9]{82})\b/g, // GitHub fine-grained PAT
+    /\b(gh[pous]_[a-zA-Z0-9]{36,255})\b/g, // GitHub PAT/Fine-grained
     /\b(xox[bapr]-[0-9]{12}-[a-zA-Z0-9]{24})\b/g, // Slack token
     /\b(AIzaSy[A-Za-z0-9_-]{33})\b/g, // Google API key
     /\b((?:sk|rk|pk)_(?:live|test)_[0-9a-zA-Z]{24,32})\b/g, // Stripe key
-    /\b(AKIA[0-9A-Z]{16,40})\b/g, // AWS Access Key ID
-    /\b(ASCA[0-9A-Z]{16,40})\b/g, // AWS ASCA Key
+    /\b(AKIA[0-9A-Z]{16,40})\b/gi, // AWS Access Key ID (case-insensitive)
+    /\b(ASCA[0-9A-Z]{16,40})\b/gi, // AWS ASCA Key
   ];
 
   for (const pattern of standalonePatterns) {
     redacted = redacted.replace(pattern, '[REDACTED]');
+  }
+
+  // 3. Robust credential shape heuristic (independent of strict key-value punctuation)
+  const containsCredKeyword = /\b(password|passwd|pwd|secret|token|api|credential|auth)\b/i.test(redacted);
+  if (containsCredKeyword) {
+    // Match password-like tokens: length 6 to 64, containing both letters and digits/symbols
+    const tokenRegex = /\b([a-zA-Z0-9_@#$%^&*+=!~\-]{6,64})\b/g;
+    
+    redacted = redacted.replace(tokenRegex, (match) => {
+      // Skip common query words and keywords
+      if (/^(password|passwd|pwd|secret|token|api|credential|auth|uses|with|key|from|here|what|have|this|that|your|same|then|want|more)$/i.test(match)) {
+        return match;
+      }
+      
+      const hasLetter = /[a-zA-Z]/.test(match);
+      const hasDigitOrSpecialSymbol = /[0-9@#$%^&*+=!~]/.test(match);
+      
+      if (hasLetter && hasDigitOrSpecialSymbol) {
+        // Require length >= 8 or containing special symbols/mixed case digits
+        const isStrongSecretCandidate = match.length >= 8 || 
+                                       (/[^a-zA-Z0-9_]/.test(match)) || 
+                                       (/[A-Z]/.test(match) && /[0-9]/.test(match));
+        
+        if (isStrongSecretCandidate) {
+          return '[REDACTED]';
+        }
+      }
+      return match;
+    });
   }
 
   return redacted;

@@ -466,6 +466,9 @@ export function redactSecrets(content) {
     /\b((?:sk|rk|pk)_(?:live|test)_[0-9a-zA-Z]{24,32})\b/g, // Stripe key
     /\b(AKIA[0-9A-Z]{16,40})\b/gi, // AWS Access Key ID (case-insensitive)
     /\b(ASCA[0-9A-Z]{16,40})\b/gi, // AWS ASCA Key
+    /\b(npm_[a-zA-Z0-9]{36,255})\b/g, // npm token
+    /\b(ey[a-zA-Z0-9_-]{10,}\.[a-zA-Z0-9_-]{10,}\.[a-zA-Z0-9_-]{10,})\b/g, // JWT token
+    /-----BEGIN[A-Z0-9\s_-]+PRIVATE\s+KEY[A-Z0-9\s_-]*-----\s*[\s\S]*?-----END[A-Z0-9\s_-]+PRIVATE\s+KEY[A-Z0-9\s_-]*-----/gi, // PEM private key
   ];
 
   for (const pattern of standalonePatterns) {

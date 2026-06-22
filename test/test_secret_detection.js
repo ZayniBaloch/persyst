@@ -48,7 +48,40 @@ test('Secret Redaction on Write', async (t) => {
     );
   });
 
-  await t.test('6. Non-sensitive strings should NOT be redacted', () => {
+  await t.test('6. npm token standalone redaction', () => {
+    const raw = 'The npm token npm_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghij is available.';
+    const expected = 'The npm token [REDACTED] is available.';
+    assert.equal(redactSecrets(raw), expected);
+  });
+
+  await t.test('7. JWT token standalone redaction', () => {
+    const raw = 'JWT token: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQs';
+    const expected = 'JWT token: [REDACTED]';
+    assert.equal(redactSecrets(raw), expected);
+  });
+
+  await t.test('8. PEM Private key redaction', () => {
+    const raw = `Here is the private key:
+-----BEGIN RSA PRIVATE KEY-----
+MIIEowIBAAKCAQEA0y...
+-----END RSA PRIVATE KEY-----
+Keep it safe.`;
+    const expected = `Here is the private key:
+[REDACTED]
+Keep it safe.`;
+    assert.equal(redactSecrets(raw), expected);
+
+    assert.equal(redactSecrets(`-----BEGIN PRIVATE KEY-----
+MC4CAQAwBQYDK2VwBCIEINT3Z1g=
+-----END PRIVATE KEY-----`), '[REDACTED]');
+
+    assert.equal(redactSecrets(`-----BEGIN PGP PRIVATE KEY BLOCK-----
+Version: GnuPG v2
+mQENBF2...
+-----END PGP PRIVATE KEY BLOCK-----`), '[REDACTED]');
+  });
+
+  await t.test('9. Non-sensitive strings should NOT be redacted', () => {
     const texts = [
       'The password reset flow was fixed.',
       'Always secure your api_key in dotenv files.',
@@ -60,3 +93,4 @@ test('Secret Redaction on Write', async (t) => {
     }
   });
 });
+

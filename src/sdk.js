@@ -101,17 +101,18 @@ export class Persyst {
    * @private
    */
   async _trackLibrary({ content, importance, agent_id, session_id, shared }) {
-    const { insertMemory, insertVector } = await import('./database.js');
+    const { insertMemory, insertVector, redactSecrets } = await import('./database.js');
     const { generateEmbedding } = await import('./embeddings.js');
 
     const namespace = shared ? 'shared' : agent_id;
-    const id = insertMemory(content, importance, {
+    const redactedContent = redactSecrets ? redactSecrets(content) : content;
+    const id = insertMemory(redactedContent, importance, {
       source_type: 'api',
       source_id: agent_id,
       confidence: 1.0
     }, namespace);
 
-    const embedding = await generateEmbedding(content);
+    const embedding = await generateEmbedding(redactedContent);
     insertVector(id, embedding);
     return { success: true, id };
   }

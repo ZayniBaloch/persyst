@@ -15,6 +15,7 @@ import { fileURLToPath } from 'url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const projectRoot = resolve(__dirname, '..');
+const TEST_PORT = 4323;
 
 let passed = 0;
 let failed = 0;
@@ -34,7 +35,7 @@ function makeRequest(path, payload) {
     const postData = JSON.stringify(payload);
     const req = http.request({
       hostname: '127.0.0.1',
-      port: 4321,
+      port: TEST_PORT,
       path: path,
       method: 'POST',
       headers: {
@@ -71,6 +72,7 @@ async function runTests() {
   console.log('🚀 Spawning Persyst MCP & HTTP server...');
   const serverProcess = spawn('node', [resolve(projectRoot, 'index.js')], {
     cwd: projectRoot,
+    env: { ...process.env, PORT: TEST_PORT, NODE_ENV: 'test' },
     stdio: ['pipe', 'ignore', 'pipe'] // pipe stderr to check for errors/listening messages
   });
 

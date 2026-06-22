@@ -16,6 +16,7 @@ import { generateEmbedding } from './embeddings.js';
 import db, {
   insertMemory,
   insertVector,
+  redactSecrets,
   getMemory,
   updateMemoryContent,
   deleteMemory,
@@ -109,8 +110,11 @@ export async function addMemoryInternal({ content, importance = 1.0, agent_id, s
   try {
     const normalizedAgentId = agent_id ? agent_id.toLowerCase() : null;
 
+    // Redact secrets/credentials on write
+    const redactedContent = redactSecrets(content);
+
     // Bug 7 + Feature 4: Validate content size
-    const validation = validateMemoryContent(content);
+    const validation = validateMemoryContent(redactedContent);
     if (!validation.valid) {
       return { error: validation.error };
     }
@@ -119,7 +123,7 @@ export async function addMemoryInternal({ content, importance = 1.0, agent_id, s
     const namespace = (shared || !normalizedAgentId) ? 'shared' : normalizedAgentId;
 
     // Deduplication check (namespace-aware)
-    const existing = getMemoryByContent(content, namespace);
+    const existing = getMemoryByContent(redactedContent, namespace);
     if (existing) {
       // Re-attribute provenance to the calling agent if it was previously auto-attributed to log-watcher
       const prov = getProvenance(existing.id);
@@ -141,20 +145,20 @@ export async function addMemoryInternal({ content, importance = 1.0, agent_id, s
       };
     }
 
-    const id = insertMemory(content, importance, {
+    const id = insertMemory(redactedContent, importance, {
       source_type: normalizedAgentId ? 'agent' : 'manual',
       source_id: normalizedAgentId,
       confidence: 1.0
     }, namespace);
 
-    const embedding = await generateEmbedding(content);
+    const embedding = await generateEmbedding(redactedContent);
     insertVector(id, embedding);
 
     // Feature 1: Invalidate search cache on write
     searchCache.invalidate();
 
     // Broadcast to SSE subscribers (HTTP gateway + SSE clients)
-    memoryEventBus.emit('memory_added', { id, content, namespace, source: normalizedAgentId || 'manual' });
+    memoryEventBus.emit('memory_added', { id, content: redactedContent, namespace, source: normalizedAgentId || 'manual' });
 
     // Feature 2: Contradiction Detection
     let contradictions = [];
@@ -169,7 +173,7 @@ export async function addMemoryInternal({ content, importance = 1.0, agent_id, s
           const existingMemory = getMemoryById(hitId, namespace);
           if (!existingMemory) continue;
 
-          const jaccard = jaccardDistance(content, existingMemory.content);
+          const jaccard = jaccardDistance(redactedContent, existingMemory.content);
           // Contradiction: similar topic (high similarity), but differing key terms
           if (jaccard > 0 && jaccard < 0.65) {
             // Fetch provenances for trust calculation
@@ -346,8 +350,11 @@ export function registerTools(server) {
       try {
         const normalizedAgentId = agent_id ? agent_id.toLowerCase() : null;
 
+        // Redact secrets/credentials on update
+        const redactedContent = redactSecrets(content);
+
         // Bug 7 + Feature 4: Validate content size
-        const validation = validateMemoryContent(content);
+        const validation = validateMemoryContent(redactedContent);
         if (!validation.valid) {
           return text({ error: validation.error });
         }
@@ -361,7 +368,7 @@ export function registerTools(server) {
 
         // Insert new version
         const newId = insertMemory(
-          content,
+          redactedContent,
           oldMemory.importance_score,
           {
             source_type: resolvedAgentId ? 'agent' : 'manual',
@@ -372,7 +379,7 @@ export function registerTools(server) {
           id
         );
 
-        const embedding = await generateEmbedding(content);
+        const embedding = await generateEmbedding(redactedContent);
         insertVector(newId, embedding);
 
         // Record contradiction and archive the old one

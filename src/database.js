@@ -430,6 +430,51 @@ const stmts = {
 };
 
 // ============================================================
+// SECRET DETECTION & REDACTION HELPERS
+// ============================================================
+
+/**
+ * Detects sensitive/credential patterns in a string and replaces values with [REDACTED].
+ * @param {string} content - The content to sanitize
+ * @returns {string} Sanitized content
+ */
+export function redactSecrets(content) {
+  if (!content || typeof content !== 'string') return content;
+
+  let redacted = content;
+
+  // 1. Redact key-value pairs matching credentials (retaining key/operator, redacting value)
+  const kvRegex = /\b(api[_-]?key|secret[_-]?key|secret|password|passwd|pwd|auth[_-]?token|access[_-]?token|client[_-]?secret|private[_-]?key)\b\s*(?:[:=]|is)\s*(?:['"]([^\n'"]{6,})['"]|([a-zA-Z0-9_\-\.\~@#$%^&*()+=]{6,}))/gi;
+  
+  redacted = redacted.replace(kvRegex, (match, key, quotedVal, unquotedVal) => {
+    const val = quotedVal || unquotedVal;
+    if (!val) return match;
+    const lastIdx = match.lastIndexOf(val);
+    if (lastIdx !== -1) {
+      return match.slice(0, lastIdx) + '[REDACTED]' + match.slice(lastIdx + val.length);
+    }
+    return match;
+  });
+
+  // 2. Redact standalone common API keys and tokens
+  const standalonePatterns = [
+    /\b(sk-[a-zA-Z0-9]{48})\b/g, // OpenAI
+    /\b(sk-proj-[a-zA-Z0-9-]{40,})\b/g, // OpenAI project
+    /\b(ghp_[a-zA-Z0-9]{36})\b/g, // GitHub PAT
+    /\b(github_pat_[a-zA-Z0-9]{82})\b/g, // GitHub fine-grained PAT
+    /\b(xox[bapr]-[0-9]{12}-[a-zA-Z0-9]{24})\b/g, // Slack token
+    /\b(AIzaSy[A-Za-z0-9_-]{33})\b/g, // Google API key
+    /\b(sk_live_[0-9a-zA-Z]{24})\b/g, // Stripe live key
+  ];
+
+  for (const pattern of standalonePatterns) {
+    redacted = redacted.replace(pattern, '[REDACTED]');
+  }
+
+  return redacted;
+}
+
+// ============================================================
 // CRUD FUNCTIONS
 // Simple, one-purpose functions. No magic.
 // ============================================================
@@ -443,11 +488,12 @@ const stmts = {
  * @returns {number} The new memory's ID
  */
 export function insertMemory(content, importance = 1.0, provenanceInfo = null, namespace = 'shared', parentId = null) {
-  if (content && content.length > 10000) {
+  const redactedContent = redactSecrets(content);
+  if (redactedContent && redactedContent.length > 10000) {
     throw new Error('Memory content exceeds maximum length of 10000 characters.');
   }
   const clampedImportance = Math.max(0.0, Math.min(1.0, Math.round(importance * 10000) / 10000));
-  const result = stmts.insertMemory.run(content, clampedImportance, namespace || 'shared', parentId);
+  const result = stmts.insertMemory.run(redactedContent, clampedImportance, namespace || 'shared', parentId);
   const id = Number(result.lastInsertRowid);
 
   // Provenance Info handling
@@ -530,7 +576,8 @@ export function getMemoryById(id, namespace = null) {
  * @returns {boolean} true if the memory existed and was updated
  */
 export function updateMemoryContent(id, content) {
-  const result = stmts.updateContent.run(content, id);
+  const redactedContent = redactSecrets(content);
+  const result = stmts.updateContent.run(redactedContent, id);
   return result.changes > 0;
 }
 

@@ -166,7 +166,7 @@ body {
 .nav-links {
   display: flex;
   align-items: center;
-  gap: 2.2rem;
+  gap: 1.5rem;
 }
 
 .nav-links a {
@@ -1106,13 +1106,23 @@ footer {
 
 /* Responsive queries */
 @media (max-width: 1024px) {
+  .nav-links {
+    gap: 0.85rem;
+  }
+  .nav-links a {
+    font-size: 0.85rem;
+  }
+  .btn-secondary {
+    padding: 0.4rem 0.8rem;
+    font-size: 0.85rem;
+  }
   .features-grid { grid-template-columns: repeat(2, 1fr); }
   .sandbox-layout { grid-template-columns: 1fr; gap: 2rem; }
   .sandbox-btn { transform: none !important; }
   .sandbox-menu { flex-direction: row; overflow-x: auto; }
 }
 
-@media (max-width: 768px) {
+@media (max-width: 900px) {
   .nav-links { display: none; }
   .features-grid { grid-template-columns: 1fr; }
   .hero { padding: 6rem 1rem 4rem; }

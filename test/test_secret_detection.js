@@ -138,7 +138,47 @@ line3"`;
     assert.equal(redactSecrets(raw), expected);
   });
 
-  await t.test('16. Non-sensitive strings should NOT be redacted', () => {
+  await t.test('16. Unquoted multiline secrets with continuation lines', () => {
+    // Test 141
+    assert.equal(
+      redactSecrets('password=line1\nline2\nline3'),
+      'password=[REDACTED]'
+    );
+    // Test 142
+    assert.equal(
+      redactSecrets('api_key=sk-test-abc123\ndef456\nghi789'),
+      'api_key=[REDACTED]'
+    );
+    // Test 143
+    assert.equal(
+      redactSecrets('secret=firstpart\nsecondpart\nthirdpart'),
+      'secret=[REDACTED]'
+    );
+    // Verify that it doesn't match the next key-value line
+    assert.equal(
+      redactSecrets('password=SimplePassword\nusername=admin'),
+      'password=[REDACTED]\nusername=admin'
+    );
+    // Verify that it doesn't match normal prose lines with spaces
+    assert.equal(
+      redactSecrets('password=MyPassword\nThis is a normal sentence.'),
+      'password=[REDACTED]\nThis is a normal sentence.'
+    );
+  });
+
+  await t.test('17. JSON credentials with quotes around keyword and trailing special characters', () => {
+    // Test 145
+    assert.equal(
+      redactSecrets('{"password": "SuperSecret123!"}'),
+      '{"password": "[REDACTED]"}'
+    );
+    assert.equal(
+      redactSecrets('{"api_key": "sk-live-abc123!!!"}'),
+      '{"api_key": "[REDACTED]"}'
+    );
+  });
+
+  await t.test('18. Non-sensitive strings should NOT be redacted', () => {
     const texts = [
       'The password reset flow was fixed.',
       'Always secure your api_key in dotenv files.',

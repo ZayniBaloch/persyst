@@ -452,7 +452,7 @@ export function redactSecrets(content) {
 
   // 2. Redact key-value pairs matching credentials (retaining key/operator, redacting value)
   // Supports single-quoted, double-quoted, and unquoted values (non-whitespace).
-  const kvRegex = /\b(api[_-]?key|secret[_-]?key|secret|password|passwd|pwd|passphrase|auth[_-]?token|access[_-]?token|client[_-]?secret|private[_-]?key|auth|access|client|aws|gcp|google|stripe|github|openai|vercel|heroku|slack|ssh[_-]?(?:key|password|passphrase|pass)?|credential|aws_secret|secret_access_key|aws_access_key|ssh_passphrase|ssh_password|ssh_key_pass)\b\s*(?:key|token|secret|password|pwd|passwd|value|string|id)?\b\s*([:=]|is|of|to|set\s+to|\(|\buses\b)\s*(?:'([^']{6,2048})'|"([^"]{6,2048})"|([^\s]{6,}))/gi;
+  const kvRegex = /['"]?\b(api[_-]?key|secret[_-]?key|secret|password|passwd|pwd|passphrase|auth[_-]?token|access[_-]?token|client[_-]?secret|private[_-]?key|auth|access|client|aws|gcp|google|stripe|github|openai|vercel|heroku|slack|ssh[_-]?(?:key|password|passphrase|pass)?|credential|aws_secret|secret_access_key|aws_access_key|ssh_passphrase|ssh_password|ssh_key_pass)\b['"]?\s*(?:key|token|secret|password|pwd|passwd|value|string|id)?(?:\b|(?<=['"]))\s*([:=]|is|of|to|set\s+to|\(|\buses\b)\s*(?:'([^']{6,2048})'|"([^"]{6,2048})"|([^\s]+(?:\n(?![a-zA-Z0-9_-]+\s*[:=])(?=[^\s]+(?:\n|$))[^\s]+)*))/gi;
 
   redacted = redacted.replace(kvRegex, (match, key, op, sqVal, dqVal, uqVal) => {
     const val = sqVal || dqVal || uqVal;
@@ -494,7 +494,7 @@ export function redactSecrets(content) {
   const containsCredKeyword = /\b(password|passwd|pwd|passphrase|pass|secret|token|api|credential|auth|ssh|aws)\b/i.test(redacted);
   if (containsCredKeyword) {
     // Match password-like tokens: length 6 to 64, containing both letters and digits/symbols
-    const tokenRegex = /\b([a-zA-Z0-9_@#$%^&*+=!~\-]{6,64})\b/g;
+    const tokenRegex = /\b([a-zA-Z0-9_@#$%^&*+!~\-]{6,64})(?!\w)/g;
     
     redacted = redacted.replace(tokenRegex, (match) => {
       // Skip common query words and technical keywords

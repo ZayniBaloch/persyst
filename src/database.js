@@ -444,7 +444,7 @@ export function redactSecrets(content) {
   let redacted = content;
 
   // 1. Redact key-value pairs matching credentials (retaining key/operator, redacting value)
-  const kvRegex = /\b(api[_-]?key|secret[_-]?key|secret|password|passwd|pwd|auth[_-]?token|access[_-]?token|client[_-]?secret|private[_-]?key)\b\s*(?:[:=]|is)\s*(?:['"]([^\n'"]{6,})['"]|([a-zA-Z0-9_\-\.\~@#$%^&*()+=]{6,}))/gi;
+  const kvRegex = /\b(api[_-]?key|secret[_-]?key|secret|password|passwd|pwd|auth[_-]?token|access[_-]?token|client[_-]?secret|private[_-]?key|auth|access|client|aws|gcp|google|stripe|github|openai|vercel|heroku|slack)\b\s*(?:key|token|secret|password|pwd|passwd|value|string|id)?\b\s*(?:[:=]|is|of|to|set\s+to|\()\s*(?:['"]([^\n'"]{6,})['"]|([a-zA-Z0-9_\-\.\~@#$%^&*+=!/]{6,}))/gi;
   
   redacted = redacted.replace(kvRegex, (match, key, quotedVal, unquotedVal) => {
     const val = quotedVal || unquotedVal;
@@ -464,7 +464,9 @@ export function redactSecrets(content) {
     /\b(github_pat_[a-zA-Z0-9]{82})\b/g, // GitHub fine-grained PAT
     /\b(xox[bapr]-[0-9]{12}-[a-zA-Z0-9]{24})\b/g, // Slack token
     /\b(AIzaSy[A-Za-z0-9_-]{33})\b/g, // Google API key
-    /\b(sk_live_[0-9a-zA-Z]{24})\b/g, // Stripe live key
+    /\b((?:sk|rk|pk)_(?:live|test)_[0-9a-zA-Z]{24,32})\b/g, // Stripe key
+    /\b(AKIA[0-9A-Z]{16,40})\b/g, // AWS Access Key ID
+    /\b(ASCA[0-9A-Z]{16,40})\b/g, // AWS ASCA Key
   ];
 
   for (const pattern of standalonePatterns) {

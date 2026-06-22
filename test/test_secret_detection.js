@@ -32,6 +32,12 @@ test('Secret Redaction on Write', async (t) => {
     assert.equal(redactSecrets('api_key: \'mysecretkey123\''), 'api_key: \'[REDACTED]\'');
     assert.equal(redactSecrets('pwd: abcdef123'), 'pwd: [REDACTED]');
     assert.equal(redactSecrets('secret is topsecret1'), 'secret is [REDACTED]');
+    assert.equal(redactSecrets('the password (SuperSecret!2026)'), 'the password ([REDACTED])');
+    assert.equal(redactSecrets('AWS access key is AKIAFAKEKEY9988776655'), 'AWS access key is [REDACTED]');
+    assert.equal(
+      redactSecrets('The AWS-key-shaped string (AKIAFAKEKEY9988776655) and the password (SuperSecret!2026)'),
+      'The AWS-key-shaped string ([REDACTED]) and the password ([REDACTED])'
+    );
   });
 
   await t.test('6. Non-sensitive strings should NOT be redacted', () => {

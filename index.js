@@ -18,7 +18,9 @@
 // If running inside Bun (like Qwen's internal runtime), spawn Node.js instead
 if (process.versions.bun && !process.env.PERSYST_RUN_BY_NODE) {
   const { spawn } = await import('child_process');
-  const child = spawn('C:\\Program Files\\nodejs\\node.exe', [
+  // Prefer NODE env var (set by nvm/fnm/volta), then fall back to 'node' on PATH
+  const nodeExec = process.env.NODE || 'node';
+  const child = spawn(nodeExec, [
     process.argv[1],
     ...process.argv.slice(2)
   ], {
@@ -80,6 +82,14 @@ if (subcommand === 'setup') {
 } else if (subcommand === 'worker') {
   // Run the background extraction worker directly
   await import('./bin/extract-worker.js');
+} else if (subcommand === 'export') {
+  // Export memories to a JSONL file
+  process.argv.splice(2, 1);
+  await import('./bin/export.js');
+} else if (subcommand === 'import') {
+  // Import memories from a JSONL file
+  process.argv.splice(2, 1);
+  await import('./bin/import.js');
 } else {
   // Default: start the MCP server
   const { startServer } = await import('./src/server.js');

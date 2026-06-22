@@ -1,48 +1,211 @@
 # 🔌 Persyst Swarm Connection Specification
 
-This specification documents the connection models, HTTP endpoints, and namespace isolation patterns for running local-first or cloud-based **Agent Swarms** integrated with the Persyst Memory Gateway.
+This specification documents all HTTP endpoints, authentication, event streaming, and namespace patterns for running reliable local-first or remote **Agent Swarms** integrated with the Persyst Memory Gateway.
 
 ---
 
 ## 🏗️ Architecture Overview
 
-When running an agent swarm, agents typically need both **shared context** (project requirements, design specs, global variables) and **private context** (agent-specific task history, specialized scratchpads). 
-
-By exposing a lightweight HTTP Gateway on `127.0.0.1:4321`, Persyst permits any swarm framework (e.g., CrewAI, Autogen, LangGraph, custom scripts) to query and store memory without subprocess overhead.
-
 ```mermaid
 graph TD
-    subgraph Swarm Framework (Python/JS)
+    subgraph Swarm Agents
       AgentA[Agent A: Planner]
       AgentB[Agent B: Coder]
       AgentC[Agent C: Reviewer]
+      ExtPy[External Python Script]
     end
 
-    subgraph Persyst HTTP Gateway (Port 4321)
-      Router{HTTP Router}
-      DB[(SQLite Memory Store)]
-      Vec[(HNSW Vector Index)]
+    subgraph Persyst HTTP Gateway
+      Health[GET /health]
+      Stats[GET /stats]
+      Prompt[GET /system-prompt]
+      Events[GET /events SSE]
+      Add[POST /add]
+      Search[POST /search]
+      Context[POST /context]
+      BatchAdd[POST /batch/add]
+      BatchSearch[POST /batch/search]
     end
 
-    AgentA -->|POST /add {agent_id: planner}| Router
-    AgentB -->|POST /search {agent_id: coder}| Router
-    AgentC -->|POST /context| Router
+    AgentA -->|POST /add| Add
+    AgentB -->|POST /search| Search
+    AgentC -->|GET /events| Events
+    ExtPy -->|POST /batch/add| BatchAdd
 
-    Router --> DB
-    Router --> Vec
+    Events -->|SSE push| AgentC
+```
+
+---
+
+## ⚙️ Environment Configuration
+
+| Variable | Default | Description |
+|---|---|---|
+| `PORT` | `4321` | HTTP Gateway port |
+| `PERSYST_HOST` | `127.0.0.1` | Bind address. Use `0.0.0.0` for Docker/remote access |
+| `PERSYST_API_KEY` | *(unset)* | Optional auth token. If set, all endpoints except `/health` require `Authorization: Bearer <token>` |
+
+### Docker example
+```bash
+PERSYST_HOST=0.0.0.0 PERSYST_API_KEY=mysecretkey npx persyst-mcp
+```
+
+### Accessing from another host
+```bash
+curl -H "Authorization: Bearer mysecretkey" http://192.168.1.100:4321/health
 ```
 
 ---
 
 ## 📡 HTTP API Reference
 
-All requests must use `POST` and include the header `'Content-Type: application/json'`.
+All `POST` requests must include `Content-Type: application/json`.  
+If `PERSYST_API_KEY` is set, all requests (except `/health`) require the header `Authorization: Bearer <key>`.
 
-### 1. Store Memory (`POST /add`)
-Saves a new fact in the memory store, generates its vector embedding, and validates it against current memories for contradictions.
+---
 
-* **Endpoint**: `/add`
-* **Request Payload**:
+### `GET /health` — Server Liveness Check
+Use this in Docker health checks and swarm orchestrators to verify the server is alive before sending work.
+
+**Always public — no auth required.**
+
+```bash
+curl http://127.0.0.1:4321/health
+```
+
+**Response:**
+```json
+{
+  "ok": true,
+  "version": "2.2.5",
+  "uptime_seconds": 3600,
+  "memories": 142,
+  "sse_clients": 3
+}
+```
+
+---
+
+### `GET /stats` — Memory & Agent Statistics
+
+```bash
+curl http://127.0.0.1:4321/stats
+```
+
+**Response:**
+```json
+{
+  "uptime_seconds": 3600,
+  "namespaces": [
+    { "namespace": "shared", "count": 100 },
+    { "namespace": "coder-agent", "count": 42 }
+  ],
+  "agents": [
+    { "agent_id": "planner-agent", "memories_added": 50, "reputation_score": 0.92 },
+    { "agent_id": "coder-agent", "memories_added": 42, "reputation_score": 0.88 }
+  ]
+}
+```
+
+---
+
+### `GET /system-prompt` — Pre-Formatted IDE Injection Block
+
+The most reliable injection mechanism. Returns a ready-to-paste memory block for any IDE's Custom Instructions / System Prompt field. Requires **zero MCP setup** on the agent side.
+
+**Query parameters:**
+| Param | Default | Description |
+|---|---|---|
+| `query` | `"project conventions architecture preferences rules stack decisions"` | Search query |
+| `max_tokens` | `1500` | Token budget |
+| `agent_id` | *(none)* | Restrict to this agent's namespace |
+| `format` | `text` | `text` \| `markdown` \| `json` |
+
+```bash
+# Plain text (paste into IDE custom instructions)
+curl "http://127.0.0.1:4321/system-prompt"
+
+# Markdown format
+curl "http://127.0.0.1:4321/system-prompt?format=markdown&max_tokens=2000"
+
+# Agent-specific context
+curl "http://127.0.0.1:4321/system-prompt?agent_id=cursor-agent&format=markdown"
+```
+
+**Example plain text response:**
+```
+=== PERSYST MEMORY CONTEXT ===
+Updated: 2026-06-22 19:39 | 8 memories
+
+[RULES & CONVENTIONS]
+• Rule: Always use camelCase for variables
+• Config: SSL certificate path must be included
+
+[ARCHITECTURE & STACK]
+• Stack: SQLite + better-sqlite3 for local database
+
+[DECISIONS]
+• Decision: MCP over stdio for AI agent communication
+
+=== END MEMORY CONTEXT ===
+Refresh: curl http://127.0.0.1:4321/system-prompt
+```
+
+**How to use in Cursor:** Settings → Rules → paste the `curl` output.  
+**How to use in Windsurf:** `.windsurfrules` → add the output as static context at the top.
+
+---
+
+### `GET /events` — Real-Time SSE Event Stream
+
+Subscribe once and receive push notifications for all memory changes. No polling required.
+
+**Events emitted:**
+| Event | Payload |
+|---|---|
+| `connected` | `{ ok: true, timestamp, server_version }` |
+| `memory_added` | `{ id, content, namespace, source }` |
+| `memory_deleted` | `{ id }` |
+| `memories_consolidated` | `{ consolidated_groups, details }` |
+| `server_shutdown` | `{ message }` |
+| *(comment)* | `: heartbeat` — every 15s to keep connection alive |
+
+**Python (sseclient):**
+```python
+import sseclient, requests
+
+def subscribe_to_memory_events():
+    url = "http://127.0.0.1:4321/events"
+    headers = {"Authorization": "Bearer mysecretkey"}  # if PERSYST_API_KEY is set
+    response = requests.get(url, headers=headers, stream=True)
+    client = sseclient.SSEClient(response)
+    
+    for event in client.events():
+        if event.event == "memory_added":
+            import json
+            data = json.loads(event.data)
+            print(f"New memory #{data['id']}: {data['content'][:60]}")
+        elif event.event == "memory_deleted":
+            import json
+            data = json.loads(event.data)
+            print(f"Memory #{data['id']} deleted")
+```
+
+**Node.js:**
+```javascript
+const EventSource = require('eventsource');
+const es = new EventSource('http://127.0.0.1:4321/events');
+
+es.addEventListener('memory_added', (e) => {
+  const data = JSON.parse(e.data);
+  console.log(`Memory #${data.id} added: ${data.content.slice(0, 60)}`);
+});
+```
+
+---
+
+### `POST /add` — Store a Single Memory
+
 ```json
 {
   "content": "Database migrations must always use the knex migration library.",
@@ -52,55 +215,66 @@ Saves a new fact in the memory store, generates its vector embedding, and valida
   "shared": true
 }
 ```
-* **Parameters**:
-  * `content` (string, required): The fact content to store.
-  * `importance` (float, optional, default: `1.0`): Priority score (0.0 to 1.0).
-  * `agent_id` (string, optional): The ID of the agent writing the memory. Sets the namespace.
-  * `session_id` (string, optional): Session tracking identifier.
-  * `shared` (boolean, optional, default: `true`): If `true`, this memory is queryable by all agents. If `false`, it is isolated to the writing agent's namespace.
 
-* **Response (200 OK)**:
+**Response:**
 ```json
 {
   "success": true,
   "id": 142,
   "content": "Database migrations must always use the knex migration library.",
-  "category": "rule",
-  "confidence": 0.85
+  "namespace": "shared"
 }
 ```
 
 ---
 
-### 2. Search Memories (`POST /search`)
-Queries the memory vector index and runs full-text FTS5 search to return attested, relevant facts.
+### `POST /batch/add` — Store Multiple Memories (One Round Trip)
 
-* **Endpoint**: `/search`
-* **Request Payload**:
+**Maximum 200 memories per request.**
+
+```json
+{
+  "memories": [
+    { "content": "Use TypeScript for all new files", "importance": 0.9, "agent_id": "coder" },
+    { "content": "Port is set to 4321", "importance": 0.8, "agent_id": "coder" },
+    { "content": "Authentication uses JWT with 24h expiry", "importance": 0.95 }
+  ]
+}
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "stored": 2,
+  "skipped": 1,
+  "errors": 0,
+  "results": [...]
+}
+```
+
+**Use case:** CI/CD pipeline storing build results, test outcomes, deployment metadata in one call.
+
+---
+
+### `POST /search` — Hybrid Keyword + Semantic Search
+
 ```json
 {
   "query": "Which database migration tool are we using?",
   "limit": 5,
-  "agent_id": "coder-agent",
-  "session_id": "session_8f90a"
+  "agent_id": "coder-agent"
 }
 ```
-* **Parameters**:
-  * `query` (string, required): Search query.
-  * `limit` (int, optional, default: `5`): Maximum results to return.
-  * `agent_id` (string, optional): Restricts private search scopes to this agent's private namespace + all `shared` memories.
 
-* **Response (200 OK)**:
+**Response:**
 ```json
 {
   "success": true,
-  "count": 1,
-  "namespace": "coder-agent",
   "results": [
     {
       "id": 142,
       "content": "Database migrations must always use the knex migration library.",
-      "category": "rule",
       "similarity": 0.88,
       "created_at": 1781646206
     }
@@ -110,94 +284,210 @@ Queries the memory vector index and runs full-text FTS5 search to return atteste
 
 ---
 
-### 3. Retrieve Context (`POST /context`)
-Retrieves a compressed, ranked context block suitable for direct insertion into an LLM's system prompt.
+### `POST /batch/search` — Multiple Queries (One Round Trip)
 
-* **Endpoint**: `/context`
-* **Request Payload**:
+**Maximum 50 queries per request. Queries run in parallel.**
+
+```json
+{
+  "queries": [
+    "database migration tool",
+    "authentication method",
+    { "query": "CSS conventions", "agent_id": "frontend-agent", "limit": 3 }
+  ],
+  "limit": 5
+}
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "results": {
+    "database migration tool": [...],
+    "authentication method": [...],
+    "CSS conventions": [...]
+  }
+}
+```
+
+**Use case:** Swarm orchestrator loading context for all active agents in one request at swarm startup.
+
+---
+
+### `POST /context` — Compressed Context Block for LLM
+
 ```json
 {
   "query": "Current database tech stack and conventions",
   "max_tokens": 2000,
-  "agent_id": "coder-agent"
+  "agent_id": "coder-agent",
+  "intent": "database_management"
 }
 ```
 
-* **Response (200 OK)**:
+**Response:**
 ```json
 {
-  "context": "=== PERSYST MEMORY ===\n• [Memory #142] Database migrations must always use the knex migration library.\n=== END MEMORY ==="
+  "context": "=== RETRIEVED AGENT MEMORY CONTEXT ===\n...",
+  "memories": [...],
+  "attestation": {...},
+  "intent": "database_management",
+  "urgency": "low",
+  "suggested_actions": ["Review migration history before making schema changes"]
 }
 ```
 
 ---
 
-## 🔒 Namespace Isolation & Sharing Models
+### `POST /tool` — Generic MCP Tool Invocation
 
-Persyst supports multi-agent setups via two isolation modes:
+Call any registered MCP tool directly via HTTP (no MCP protocol required).
 
-1. **Shared Workspace Memory (`shared: true`)**:
-   - Stored in the global namespace.
-   - Any agent in the swarm can query and leverage these memories.
-   - Perfect for project-level conventions (e.g. "We use vanilla CSS").
-
-2. **Agent-Isolated Memory (`shared: false`)**:
-   - Tagged specifically with `agent_id`.
-   - Invisible to other agents in the swarm.
-   - Ideal for agent-specific workflows (e.g. Coder agent's private debugging stack).
+```json
+{
+  "name": "ingest_git_commits",
+  "arguments": { "repo_path": "/path/to/repo", "count": 50 }
+}
+```
 
 ---
 
-## 💻 Swarm Code Integration Example (Python)
+### `POST /verify` — Chain Integrity Verification
 
-Below is a ready-to-use utility class for integrating Persyst Memory into a Python-based swarm agent.
+Verifies the Ed25519 attestation chain hasn't been tampered with.
+
+```bash
+curl -X POST http://127.0.0.1:4321/verify
+```
+
+---
+
+## 🔒 Namespace Isolation & Sharing
+
+| Mode | `shared` param | Behavior |
+|---|---|---|
+| Shared workspace | `true` (default) | Visible to all agents in the swarm |
+| Agent-isolated | `false` | Only visible to the writing agent (by `agent_id`) |
+
+---
+
+## 💻 Complete Python Swarm Client
 
 ```python
 import requests
-from typing import List, Dict, Any
+import json
+from typing import List, Dict, Any, Optional
 
-class PersystClient:
-    def __init__(self, host: str = "127.0.0.1", port: int = 4321):
+class PersystSwarmClient:
+    """
+    Production-ready Persyst client for agentic swarms.
+    Supports health checking, auth, batch ops, and SSE events.
+    """
+    
+    def __init__(self, host: str = "127.0.0.1", port: int = 4321, api_key: Optional[str] = None):
         self.base_url = f"http://{host}:{port}"
+        self.session = requests.Session()
+        if api_key:
+            self.session.headers["Authorization"] = f"Bearer {api_key}"
+        self.session.headers["Content-Type"] = "application/json"
 
-    def add_memory(self, content: str, agent_id: str, shared: bool = True) -> Dict[str, Any]:
-        """Store a fact in Persyst Memory Gateway."""
+    def is_alive(self) -> bool:
+        """Check if the Persyst server is running."""
         try:
-          response = requests.post(
-              f"{self.base_url}/add",
-              json={"content": content, "agent_id": agent_id, "shared": shared},
-              timeout=1.0
-          )
-          return response.json()
-        except requests.exceptions.RequestException as e:
-          return {"success": False, "error": str(e)}
-
-    def search_memories(self, query: str, agent_id: str, limit: int = 5) -> List[Dict[str, Any]]:
-        """Search memories visible to this agent."""
-        try:
-          response = requests.post(
-              f"{self.base_url}/search",
-              json={"query": query, "agent_id": agent_id, "limit": limit},
-              timeout=1.0
-          )
-          return response.json().get("results", [])
+            r = requests.get(f"{self.base_url}/health", timeout=1.0)
+            return r.status_code == 200 and r.json().get("ok", False)
         except requests.exceptions.RequestException:
-          return []
+            return False
 
-    def get_prompt_context(self, query: str, agent_id: str, max_tokens: int = 1500) -> str:
-        """Get pre-formatted prompt context block."""
+    def add(self, content: str, agent_id: str = None, importance: float = 1.0, shared: bool = True) -> Dict:
         try:
-          response = requests.post(
-              f"{self.base_url}/context",
-              json={"query": query, "agent_id": agent_id, "max_tokens": max_tokens},
-              timeout=1.0
-          )
-          return response.json().get("context", "")
-        except requests.exceptions.RequestException:
-          return ""
+            r = self.session.post(f"{self.base_url}/add", json={
+                "content": content, "agent_id": agent_id, "importance": importance, "shared": shared
+            }, timeout=5.0)
+            return r.json()
+        except Exception as e:
+            return {"error": str(e)}
 
-# Usage in Agent Prompting:
-# client = PersystClient()
-# context = client.get_prompt_context("CSS styling rules", agent_id="frontend-agent")
-# system_prompt = f"You are a CSS wizard. Use the following context:\n{context}"
+    def batch_add(self, memories: List[Dict]) -> Dict:
+        """Store up to 200 memories in one round trip."""
+        try:
+            r = self.session.post(f"{self.base_url}/batch/add", json={"memories": memories}, timeout=30.0)
+            return r.json()
+        except Exception as e:
+            return {"error": str(e)}
+
+    def search(self, query: str, agent_id: str = None, limit: int = 5) -> List[Dict]:
+        try:
+            r = self.session.post(f"{self.base_url}/search", json={
+                "query": query, "agent_id": agent_id, "limit": limit
+            }, timeout=5.0)
+            return r.json().get("results", [])
+        except Exception:
+            return []
+
+    def batch_search(self, queries: List[str], limit: int = 5) -> Dict[str, List]:
+        """Run multiple queries in parallel in one request."""
+        try:
+            r = self.session.post(f"{self.base_url}/batch/search", json={
+                "queries": queries, "limit": limit
+            }, timeout=10.0)
+            return r.json().get("results", {})
+        except Exception:
+            return {}
+
+    def context(self, query: str, agent_id: str = None, max_tokens: int = 2000) -> str:
+        try:
+            r = self.session.post(f"{self.base_url}/context", json={
+                "query": query, "agent_id": agent_id, "max_tokens": max_tokens
+            }, timeout=5.0)
+            return r.json().get("context", "")
+        except Exception:
+            return ""
+
+    def system_prompt(self, format: str = "text", max_tokens: int = 1500) -> str:
+        """Get pre-formatted context block to paste into IDE custom instructions."""
+        try:
+            r = requests.get(f"{self.base_url}/system-prompt", params={
+                "format": format, "max_tokens": max_tokens
+            }, timeout=5.0)
+            return r.text
+        except Exception:
+            return ""
+
+    def stats(self) -> Dict:
+        try:
+            r = self.session.get(f"{self.base_url}/stats", timeout=5.0)
+            return r.json()
+        except Exception:
+            return {}
+
+
+# ── Swarm Usage Example ──────────────────────────────────────────
+
+if __name__ == "__main__":
+    client = PersystSwarmClient(api_key="mysecretkey")  # Remove api_key if not using auth
+    
+    if not client.is_alive():
+        print("❌ Persyst server not running. Start with: npx persyst-mcp")
+        exit(1)
+    
+    # Load all agent contexts at startup in one request
+    contexts = client.batch_search([
+        "database stack",
+        "authentication method",
+        "CSS and UI conventions",
+        "testing framework"
+    ])
+    
+    for topic, memories in contexts.items():
+        print(f"[{topic}]: {len(memories)} memories loaded")
+    
+    # Store results at end of run in bulk
+    results = [
+        {"content": "Decision: Chose PostgreSQL for high concurrency", "importance": 0.95},
+        {"content": "Stack: Using Prisma ORM for type-safe queries", "importance": 0.9},
+    ]
+    report = client.batch_add(results)
+    print(f"Stored {report['stored']} memories, skipped {report['skipped']} duplicates")
 ```

@@ -116,6 +116,13 @@ Add Persyst to your Antigravity agent configuration file at `~/.gemini/antigravi
 | `delete_memory` | Delete a memory and clean up edges | `id` (number) |
 | `get_recent_memories` | Get latest memories | `limit` (number) |
 | `get_important_memories` | Get by importance score | `limit` (number) |
+| `get_optimized_context` | Get compressed, ranked context block | `query` (string), `max_tokens` (number) |
+| `ingest_git_commits` | Import recent git commits as memories | `repo_path` (string), `count` (number) |
+| `consolidate_memories` | Merge highly similar duplicate memories | — |
+| `get_memory_history` | Retrieve all versions of a memory | `query` (string) |
+| `get_agent_stats` | Agent reputation stats | — |
+| `export_audit_log` | Export attestation audit log | `start_date`, `end_date` (ISO8601) |
+| `verify_attestation` | Verify Ed25519 signature chain | `attestation_id` (string) |
 
 ---
 
@@ -159,6 +166,38 @@ Do not run `npx` with `sudo`. If you run into permission issues, ensure your npm
 
 ---
 
+## Backup & Migration
+
+Persyst includes built-in JSONL export/import commands for portable memory backup and cross-machine migration.
+
+```bash
+# Export all memories to a file
+npx persyst-mcp export
+# → persyst-export-<timestamp>.jsonl
+
+# Export to a specific file
+npx persyst-mcp export my-backup.jsonl
+
+# Preview what would be imported (dry run)
+npx persyst-mcp import my-backup.jsonl --dry-run
+
+# Import memories (skips exact & semantic duplicates automatically)
+npx persyst-mcp import my-backup.jsonl
+```
+
+---
+
+## Roadmap & Future Directions
+
+Persyst is built for the privacy-focused solo developer. We are actively hardening the local-first experience before introducing network dependencies.
+
+* **File-Based Sync** ✅ **Done**: `persyst-export` / `persyst-import` JSONL commands for backup and migration.
+* **IDE Integrations**: First-class extensions for Cursor, VS Code, and Aider configuration helper commands.
+* **True P2P Sync (Roadmap)**: Peer-to-peer secure sync between developer devices without relying on central cloud servers.
+
+---
+
 ## License
 
 MIT License. See [LICENSE](LICENSE) for details.
+

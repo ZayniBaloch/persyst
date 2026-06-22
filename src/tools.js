@@ -48,6 +48,7 @@ import { searchHybrid, getOptimizedContext, consolidateMemories } from './search
 import { getRecentCommits } from './git.js';
 import { verifyChainIntegrity } from './attestation.js';
 import { searchCache } from './cache.js';
+import { memoryEventBus } from './events.js';
 
 // ============================================================
 // CONSTANTS
@@ -151,6 +152,9 @@ export async function addMemoryInternal({ content, importance = 1.0, agent_id, s
 
     // Feature 1: Invalidate search cache on write
     searchCache.invalidate();
+
+    // Broadcast to SSE subscribers (HTTP gateway + SSE clients)
+    memoryEventBus.emit('memory_added', { id, content, namespace, source: normalizedAgentId || 'manual' });
 
     // Feature 2: Contradiction Detection
     let contradictions = [];
@@ -402,6 +406,9 @@ export function registerTools(server) {
 
         // Feature 1: Invalidate search cache on write
         searchCache.invalidate();
+
+        // Broadcast deletion to SSE subscribers
+        memoryEventBus.emit('memory_deleted', { id });
 
         return text({ success: true, id, message: `Memory #${id} deleted` });
       } catch (err) {

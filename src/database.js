@@ -34,6 +34,9 @@ const db = new Database(DB_PATH);
 db.pragma('journal_mode = WAL');   // Better performance for concurrent reads
 db.pragma('foreign_keys = ON');    // Enforce referential integrity
 db.pragma('mmap_size = 268435456'); // 256MB memory-mapped I/O for faster reads
+db.pragma('synchronous = NORMAL');  // Performance boost for WAL mode
+db.pragma('temp_store = MEMORY');   // Keep temp tables in memory
+db.pragma('cache_size = -64000');   // 64MB cache size
 
 // Load sqlite-vec BEFORE creating any vec0 tables
 sqliteVec.load(db);
@@ -330,7 +333,7 @@ const stmts = {
   decay: db.prepare(`
     UPDATE memories
     SET importance_score = ROUND(MAX(importance_score * 0.95, 0.0), 4)
-    WHERE (? - last_accessed) > 604800
+    WHERE (unixepoch() - last_accessed) > 604800
   `),
 
   // -- Search --
@@ -615,8 +618,7 @@ export function boostMemory(id) {
  * Called automatically every hour by the server.
  */
 export function applyTemporalDecay() {
-  const now = Math.floor(Date.now() / 1000);
-  const result = stmts.decay.run(now);
+  const result = stmts.decay.run();
   if (result.changes > 0) {
     console.error(`[persyst] Decay applied to ${result.changes} memories`);
   }
@@ -749,7 +751,7 @@ export function memoryExistsByHashPrefix(pattern) {
  * @returns {number}
  */
 export function getActiveMemoryCount(namespace = null) {
-  if (namespace) {
+  if (namespace && namespace !== 'all') {
     return stmts.getActiveMemoryCountNs.get(namespace).count;
   }
   return stmts.getActiveMemoryCount.get().count;

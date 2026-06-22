@@ -6,7 +6,10 @@
   "main": "index.js",
   "exports": {
     ".": "./index.js",
-    "./sdk": "./src/sdk.js"
+    "./sdk": {
+      "types": "./src/sdk.d.ts",
+      "default": "./src/sdk.js"
+    }
   },
   "bin": {
     "persyst-mcp": "index.js",
@@ -15,7 +18,9 @@
     "persyst-init": "bin/init.js",
     "persyst-ingest": "bin/ingest.js",
     "persyst-extract": "bin/extract.js",
-    "persyst-worker": "bin/extract-worker.js"
+    "persyst-worker": "bin/extract-worker.js",
+    "persyst-export": "bin/export.js",
+    "persyst-import": "bin/import.js"
   },
   "engines": {
     "node": ">=18.0.0"
@@ -31,7 +36,7 @@
   "scripts": {
     "start": "node index.js",
     "test": "cross-env NODE_ENV=test node test/smoke.js",
-    "test:heavy": "cross-env NODE_ENV=test node --test --test-concurrency=1 test/test_*.js",
+    "test:heavy": "node test/run_sequentially.js",
     "worker": "node bin/extract-worker.js",
     "extract": "node bin/extract.js"
   },
@@ -64,6 +69,7 @@
     "@huggingface/transformers": "^4.2.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "better-sqlite3": "^12.10.0",
+    "chokidar": "^5.0.0",
     "sqlite-vec": "^0.1.9",
     "zod": "^3.23.0"
   },

@@ -8,7 +8,7 @@
 
 import { join, resolve } from 'path';
 import { homedir } from 'os';
-import { existsSync, readFileSync, writeFileSync, readdirSync, statSync } from 'fs';
+import { existsSync, readFileSync, writeFileSync, readdirSync, statSync, openSync, readSync, closeSync } from 'fs';
 import {
   getWatchPosition,
   upsertWatchPosition,
@@ -20,6 +20,7 @@ import { generateEmbedding } from './embeddings.js';
 import { extractHeuristic } from './extractor-heuristic.js';
 import { searchHybrid } from './search.js';
 import { searchCache } from './cache.js';
+import { memoryEventBus } from './events.js';
 
 // Config path: ~/.persyst/config.json
 const CONFIG_FILE = join(homedir(), '.persyst', 'config.json');
@@ -86,10 +87,19 @@ async function processJsonlFile(filePath) {
 
     if (stat.size <= lastPos) return;
 
-    // Read only new content appended to the file
-    const fileBuffer = readFileSync(filePath);
-    const newContentBuffer = fileBuffer.subarray(lastPos, stat.size);
-    const text = newContentBuffer.toString('utf8');
+    // Read only new content appended to the file (Bug C fix)
+    const length = stat.size - lastPos;
+    let text = '';
+    if (length > 0) {
+      const newContentBuffer = Buffer.alloc(length);
+      const fd = openSync(filePath, 'r');
+      try {
+        readSync(fd, newContentBuffer, 0, length, lastPos);
+      } finally {
+        closeSync(fd);
+      }
+      text = newContentBuffer.toString('utf8');
+    }
 
     const lines = text.split('\n');
     let addedCount = 0;
@@ -116,16 +126,16 @@ async function processJsonlFile(filePath) {
 
         const facts = extractHeuristic(cleanText);
         for (const fact of facts) {
-          // Verify against exact duplicate
-          if (memoryExists(fact.content)) continue;
+          // Verify against exact duplicate (Bug A fix: check namespace 'shared')
+          if (memoryExists(fact.content, 'shared')) continue;
 
-          // Verify against semantic similarity
-          const similar = await searchHybrid(fact.content, 1);
+          // Verify against semantic similarity (Bug B fix: check namespace 'shared')
+          const similar = await searchHybrid(fact.content, 1, null, null, 'shared');
           if (similar.length > 0 && parseFloat(similar[0].similarity) >= DEDUP_THRESHOLD) {
             continue;
           }
 
-          // Insert memory with provenance
+          // Insert memory with provenance (written to 'shared' by default)
           const id = insertMemory(fact.content, fact.confidence, {
             source_type: 'agent',
             source_id: record.source === 'MODEL' ? 'antigravity-worker' : 'user-dialogue',
@@ -136,6 +146,7 @@ async function processJsonlFile(filePath) {
           insertVector(id, embedding);
           addedCount++;
           console.error(`[persyst-watcher] Auto-extracted fact: "${fact.content}" (Memory #${id})`);
+          memoryEventBus.emit('memory_added', { id, content: fact.content, namespace: 'shared', source: 'watcher-antigravity' });
         }
       }
     }
@@ -181,13 +192,16 @@ async function processJsonFile(filePath) {
       if (msg.role === 'user' || msg.role === 'assistant') {
         const facts = extractHeuristic(msg.content);
         for (const fact of facts) {
-          if (memoryExists(fact.content)) continue;
+          // Verify against exact duplicate (Bug A fix: check namespace 'shared')
+          if (memoryExists(fact.content, 'shared')) continue;
 
-          const similar = await searchHybrid(fact.content, 1);
+          // Verify against semantic similarity (Bug B fix: check namespace 'shared')
+          const similar = await searchHybrid(fact.content, 1, null, null, 'shared');
           if (similar.length > 0 && parseFloat(similar[0].similarity) >= DEDUP_THRESHOLD) {
             continue;
           }
 
+          // Insert memory with provenance (written to 'shared' by default)
           const id = insertMemory(fact.content, fact.confidence, {
             source_type: 'agent',
             source_id: msg.role === 'assistant' ? 'roo-worker' : 'user-dialogue',
@@ -198,6 +212,7 @@ async function processJsonFile(filePath) {
           insertVector(id, embedding);
           addedCount++;
           console.error(`[persyst-watcher] Auto-extracted fact: "${fact.content}" (Memory #${id})`);
+          memoryEventBus.emit('memory_added', { id, content: fact.content, namespace: 'shared', source: 'watcher-roo' });
         }
       }
     }

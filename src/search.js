@@ -386,11 +386,22 @@ export async function getOptimizedContext(queryText, maxTokens, agentId = null, 
   // 4. Sort candidates
   list.sort((a, b) => b.score - a.score);
 
-  // 5. Compress context to fit maxTokens
+  // 5. Compress context to fit maxTokens with on-the-fly diversity check
   let currentTokens = 0;
   const accepted = [];
 
   for (const c of list) {
+    // Skip if too similar to any already accepted memory to prevent redundant context bloat
+    let isRedundant = false;
+    for (const acc of accepted) {
+      const sim = jaccardSimilarity(c.content, acc.content);
+      if (sim > 0.60) {
+        isRedundant = true;
+        break;
+      }
+    }
+    if (isRedundant) continue;
+
     // Heuristic: ~4 characters per token + format headers (~15 tokens)
     const estimatedTokens = Math.max(1, Math.ceil(c.content.length / 4) + 15);
     if (currentTokens + estimatedTokens > maxTokens) {

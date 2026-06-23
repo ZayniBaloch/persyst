@@ -14,6 +14,7 @@
 import { z } from 'zod';
 import { generateEmbedding } from './embeddings.js';
 import db, {
+  stmts,
   insertMemory,
   insertVector,
   redactSecrets,
@@ -130,8 +131,7 @@ export async function addMemoryInternal({ content, importance = 1.0, agent_id, s
       const prov = getProvenance(existing.id);
       if (prov && (prov.source_id === 'antigravity-worker' || prov.source_id === 'user-dialogue') && normalizedAgentId) {
         try {
-          db.prepare("UPDATE provenance SET source_type = 'agent', source_id = ?, confidence = 1.0 WHERE memory_id = ?")
-            .run(normalizedAgentId, existing.id);
+          stmts.updateProvenanceOwner.run(normalizedAgentId, existing.id);
           incrementAgentStat(normalizedAgentId, 'created');
         } catch (e) {
           console.error(`[persyst] Re-attribute provenance error: ${e.message}`);
@@ -181,13 +181,13 @@ export async function addMemoryInternal({ content, importance = 1.0, agent_id, s
             const oldProv = getProvenance(hitId);
             let oldReputation = 1.0;
             if (oldProv && oldProv.source_type === 'agent' && oldProv.source_id) {
-              const agentRow = db.prepare('SELECT reputation_score FROM agent_stats WHERE agent_id = ?').get(oldProv.source_id);
+              const agentRow = stmts.getReputationScore.get(oldProv.source_id);
               if (agentRow) oldReputation = agentRow.reputation_score;
             }
 
             let newReputation = 1.0;
             if (normalizedAgentId) {
-              const agentRow = db.prepare('SELECT reputation_score FROM agent_stats WHERE agent_id = ?').get(normalizedAgentId);
+              const agentRow = stmts.getReputationScore.get(normalizedAgentId);
               if (agentRow) newReputation = agentRow.reputation_score;
             }
 

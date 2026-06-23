@@ -9,7 +9,7 @@ import crypto from 'crypto';
 import { mkdirSync, readFileSync, writeFileSync, existsSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
-import db, { getLastAttestation, insertAttestation, getAttestationById } from './database.js';
+import db, { stmts, getLastAttestation, insertAttestation, getAttestationById } from './database.js';
 
 const KEYS_DIR = join(homedir(), '.persyst', 'keys');
 
@@ -171,7 +171,7 @@ export function verifyAttestationRecord(attestation) {
 }
 
 /**
- * Recursively verifies signature and chain integrity.
+ * Iteratively verifies signature and chain integrity.
  * Walks backwards from the target attestation to the genesis link,
  * confirming each previous_hash matches the predecessor's actual hash
  * and that sequence order strictly increases.
@@ -187,48 +187,37 @@ export function verifyChainIntegrity(attestationId) {
     return selfVerify;
   }
 
-  return verifyPredecessorChain(att);
-}
-
-/**
- * Recursively walk the chain backwards and verify hashes/ordering.
- */
-function verifyPredecessorChain(att, depth = 0) {
-  // Defensive depth limit to avoid unbounded recursion on a corrupted chain.
+  // Iterative chain walk — no recursion, no stack overflow risk
   const MAX_CHAIN_DEPTH = 10000;
-  if (depth > MAX_CHAIN_DEPTH) {
-    return { valid: false, error: 'Broken chain: recursion depth exceeded' };
+  let current = att;
+  let depth = 0;
+
+  while (current.previous_hash) {
+    if (depth >= MAX_CHAIN_DEPTH) {
+      return { valid: false, error: 'Broken chain: chain length exceeds maximum' };
+    }
+
+    const prevAtt = stmts.getAttestationByHash.get(current.previous_hash);
+    if (!prevAtt) {
+      return { valid: false, error: `Broken chain: Previous attestation with hash ${current.previous_hash} not found` };
+    }
+
+    if (prevAtt.hash !== current.previous_hash) {
+      return { valid: false, error: 'Broken chain: previous_hash does not match predecessor hash' };
+    }
+
+    if (prevAtt.id >= current.id) {
+      return { valid: false, error: 'Broken chain: Invalid sequence order' };
+    }
+
+    const prevVerify = verifyAttestationRecord(prevAtt);
+    if (!prevVerify.valid) {
+      return { valid: false, error: `Broken chain: Previous link is invalid: ${prevVerify.error}` };
+    }
+
+    current = prevAtt;
+    depth++;
   }
 
-  if (!att.previous_hash) {
-    return { valid: true, attestation: att };
-  }
-
-  const prevAtt = getAttestationByHash(att.previous_hash);
-  if (!prevAtt) {
-    return { valid: false, error: `Broken chain: Previous attestation with hash ${att.previous_hash} not found` };
-  }
-
-  // The stored previous_hash must match the predecessor's actual hash.
-  if (prevAtt.hash !== att.previous_hash) {
-    return { valid: false, error: 'Broken chain: previous_hash does not match predecessor hash' };
-  }
-
-  if (prevAtt.id >= att.id) {
-    return { valid: false, error: `Broken chain: Invalid sequence order` };
-  }
-
-  const prevVerify = verifyAttestationRecord(prevAtt);
-  if (!prevVerify.valid) {
-    return { valid: false, error: `Broken chain: Previous link is invalid: ${prevVerify.error}` };
-  }
-
-  return verifyPredecessorChain(prevAtt, depth + 1);
-}
-
-/**
- * Helper to fetch attestation by hash since it's not exposed globally.
- */
-function getAttestationByHash(hash) {
-  return db.prepare('SELECT * FROM attestations WHERE hash = ?').get(hash) || null;
+  return { valid: true, attestation: current };
 }

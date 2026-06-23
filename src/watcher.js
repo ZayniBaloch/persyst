@@ -298,6 +298,24 @@ export async function scanDirectories() {
   }
 }
 
+const SCAN_INTERVAL_MS = 5000;
+
+/**
+ * Schedule the next scan. Uses recursive setTimeout to prevent
+ * overlapping scans when a scan takes longer than the interval.
+ */
+async function scheduleNextScan() {
+  try {
+    await scanDirectories();
+  } catch (err) {
+    console.error(`[persyst-watcher] Folder scan failed: ${err.message}`);
+  }
+  // Only schedule the next scan after the current one fully completes
+  if (intervalId) {
+    intervalId = setTimeout(scheduleNextScan, SCAN_INTERVAL_MS);
+  }
+}
+
 /**
  * Start the background log watcher daemon.
  */
@@ -305,22 +323,18 @@ export function startWatcher() {
   if (intervalId) return;
 
   console.error('[persyst-watcher] Starting background log watcher daemon...');
-  // Warm up config/paths
   loadWatchedDirs();
 
-  // Run initial scan
-  scanDirectories().catch(err => {
-    console.error(`[persyst-watcher] Initial scan failed: ${err.message}`);
-  });
-
-  // Polling directory scan every 5 seconds
-  intervalId = setInterval(async () => {
-    try {
-      await scanDirectories();
-    } catch (err) {
-      console.error(`[persyst-watcher] Folder scan failed: ${err.message}`);
-    }
-  }, 5000);
+  // Run initial scan, then schedule periodic scans
+  scanDirectories()
+    .catch(err => {
+      console.error(`[persyst-watcher] Initial scan failed: ${err.message}`);
+    })
+    .then(() => {
+      if (!intervalId) {
+        intervalId = setTimeout(scheduleNextScan, SCAN_INTERVAL_MS);
+      }
+    });
 }
 
 /**
@@ -328,7 +342,7 @@ export function startWatcher() {
  */
 export function stopWatcher() {
   if (intervalId) {
-    clearInterval(intervalId);
+    clearTimeout(intervalId);
     intervalId = null;
     console.error('[persyst-watcher] Background log watcher daemon stopped.');
   }

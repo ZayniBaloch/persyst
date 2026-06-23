@@ -691,11 +691,25 @@ export async function startServer() {
     }
   }, 86400000);
 
+  // --- SSE client health-check every 30 seconds (removes stale connections) ---
+  const sseHealthCheck = setInterval(() => {
+    for (const client of sseClients) {
+      try {
+        client.write(': health-check\n\n');
+      } catch (_) {
+        // Client is stale — remove it
+        try { client.end(); } catch (_) {}
+        sseClients.delete(client);
+      }
+    }
+  }, 30000);
+
   // --- Graceful shutdown ---
   const shutdown = () => {
     console.error('[persyst] Shutting down...');
     clearInterval(decayTimer);
     clearInterval(consolidationTimer);
+    clearInterval(sseHealthCheck);
     stopWatcher();
     cleanupWatchers();
 
@@ -710,7 +724,8 @@ export async function startServer() {
 
     httpServer.close();
     closeDatabase();
-    process.exit(0);
+    // Let the process exit naturally after all handles are closed
+    // process.exit(0) removed — Node exits on its own when event loop is empty
   };
   process.on('SIGINT', shutdown);
   process.on('SIGTERM', shutdown);

@@ -8,6 +8,7 @@
  */
 
 import db, {
+  stmts,
   searchKeyword,
   searchVector,
   getMemoryById,
@@ -117,7 +118,7 @@ export async function searchHybrid(queryText, limit = 5, agentId = null, session
       let reputationWarning = false;
       const prov = memory.provenance;
       if (prov && prov.source_type === 'agent' && prov.source_id) {
-        const agentRow = db.prepare('SELECT reputation_score FROM agent_stats WHERE agent_id = ?').get(prov.source_id);
+        const agentRow = stmts.getReputationScore.get(prov.source_id);
         if (agentRow) {
           reputationScore = agentRow.reputation_score;
           if (reputationScore < 0.5) {
@@ -282,11 +283,7 @@ export async function getOptimizedContext(queryText, maxTokens, agentId = null, 
     if (depth >= 6) continue;
 
     // --- 2a. Explicit Graph Edges (from edges table) ---
-    const connectedEdges = db.prepare(`
-      SELECT * FROM edges 
-      WHERE (source_id = ? AND source_type = ?)
-         OR (target_id = ? AND target_type = ?)
-    `).all(id, type, id, type);
+    const connectedEdges = stmts.getEdgesBySourceAndType.all(id, type, id, type);
 
     for (const edge of connectedEdges) {
       let nextId, nextType;
@@ -307,7 +304,7 @@ export async function getOptimizedContext(queryText, maxTokens, agentId = null, 
 
     // --- 2b. Implicit Name-Based Edges (for robustness when explicit edges are missing) ---
     if (type === 'memory') {
-      const memoryRow = db.prepare('SELECT content FROM memories WHERE id = ?').get(id);
+      const memoryRow = stmts.getMemoryContentById.get(id);
       if (memoryRow && memoryRow.content) {
         const contentLower = memoryRow.content.toLowerCase();
         for (const ent of entities) {
@@ -323,7 +320,7 @@ export async function getOptimizedContext(queryText, maxTokens, agentId = null, 
     } else if (type === 'entity') {
       const ent = entities.find(e => e.id === id);
       if (ent && ent.name) {
-        const matchingMemories = db.prepare('SELECT id FROM memories WHERE content LIKE ? AND valid_until IS NULL').all(`%${ent.name}%`);
+        const matchingMemories = stmts.getMemoryLikeContent.all(`%${ent.name}%`);
         for (const row of matchingMemories) {
           const nextKey = `memory:${row.id}`;
           if (!visitedNodes.has(nextKey)) {
@@ -517,22 +514,17 @@ export async function consolidateMemories(namespace = null) {
     if (visited.has(mem.id)) return;
 
     // Search for similar memories
-    const embedding = db.prepare('SELECT embedding FROM memories_vec WHERE rowid = ?').get(mem.id);
+    const embedding = stmts.getVecByRowId.get(mem.id);
     if (!embedding) return;
 
-    const hits = db.prepare(`
-      SELECT rowid AS id, distance
-      FROM memories_vec
-      WHERE embedding MATCH ?
-      AND k = 30
-    `).all(embedding.embedding);
+    const hits = stmts.consolidateVecSearch.all(embedding.embedding);
 
     const group = [];
     for (const hit of hits) {
       if (visited.has(Number(hit.id))) continue;
       const sim = Math.max(0, 1 - (hit.distance * hit.distance) / 2);
       if (sim > 0.80) {
-        const other = db.prepare('SELECT * FROM memories WHERE id = ? AND valid_until IS NULL').get(Number(hit.id));
+        const other = stmts.getMemoryByIdRaw.get(Number(hit.id));
         if (other) {
           group.push(other);
         }
@@ -545,7 +537,7 @@ export async function consolidateMemories(namespace = null) {
         const prov = getProvenance(m.id);
         let reputation = 1.0;
         if (prov && prov.source_type === 'agent' && prov.source_id) {
-          const agentRow = db.prepare('SELECT reputation_score FROM agent_stats WHERE agent_id = ?').get(prov.source_id);
+          const agentRow = stmts.getReputationScore.get(prov.source_id);
           if (agentRow) reputation = agentRow.reputation_score;
         }
         return (prov ? prov.confidence : 1.0) * reputation;
@@ -566,34 +558,30 @@ export async function consolidateMemories(namespace = null) {
         if (rel.type === 'contradiction') {
           // Resolve contradiction: keep canonical, archive current.
           // logContradiction already updates agent stats, so we only record the archive here.
-          db.prepare('UPDATE memories SET valid_until = unixepoch() WHERE id = ?').run(current.id);
-          db.prepare('INSERT INTO contradictions (old_memory_id, new_memory_id, resolution_reason) VALUES (?, ?, ?)')
-            .run(current.id, canonical.id, `Consolidated contradiction: resolved in favor of canonical #${canonical.id}`);
+          stmts.archiveMemoryById.run(current.id);
+          stmts.insertContradiction.run(current.id, canonical.id, `Consolidated contradiction: resolved in favor of canonical #${canonical.id}`);
 
           archivedIds.push(current.id);
           visited.add(current.id);
         } else if (rel.type === 'subset') {
           if (rel.keep === 'b') {
             // current (B) is a superset of canonical (A). Swap them
-            db.prepare('UPDATE memories SET valid_until = unixepoch() WHERE id = ?').run(canonical.id);
-            db.prepare('INSERT INTO contradictions (old_memory_id, new_memory_id, resolution_reason) VALUES (?, ?, ?)')
-              .run(canonical.id, current.id, `Consolidated subset: replaced by more detailed #${current.id}`);
+            stmts.archiveMemoryById.run(canonical.id);
+            stmts.insertContradiction.run(canonical.id, current.id, `Consolidated subset: replaced by more detailed #${current.id}`);
 
             archivedIds.push(canonical.id);
             canonical = current;
           } else {
             // canonical is superset
-            db.prepare('UPDATE memories SET valid_until = unixepoch() WHERE id = ?').run(current.id);
-            db.prepare('INSERT INTO contradictions (old_memory_id, new_memory_id, resolution_reason) VALUES (?, ?, ?)')
-              .run(current.id, canonical.id, `Consolidated subset: subsumed by more detailed #${canonical.id}`);
+            stmts.archiveMemoryById.run(current.id);
+            stmts.insertContradiction.run(current.id, canonical.id, `Consolidated subset: subsumed by more detailed #${canonical.id}`);
 
             archivedIds.push(current.id);
           }
           visited.add(current.id);
         } else if (rel.type === 'duplicate') {
-          db.prepare('UPDATE memories SET valid_until = unixepoch() WHERE id = ?').run(current.id);
-          db.prepare('INSERT INTO contradictions (old_memory_id, new_memory_id, resolution_reason) VALUES (?, ?, ?)')
-            .run(current.id, canonical.id, `Consolidated duplicate of #${canonical.id}`);
+          stmts.archiveMemoryById.run(current.id);
+          stmts.insertContradiction.run(current.id, canonical.id, `Consolidated duplicate of #${canonical.id}`);
 
           archivedIds.push(current.id);
           visited.add(current.id);

@@ -436,8 +436,70 @@ const stmts = {
     INSERT INTO watched_files (file_path, last_position)
     VALUES (?, ?)
     ON CONFLICT(file_path) DO UPDATE SET last_position = excluded.last_position, updated_at = unixepoch()
-  `)
+  `),
+
+  // -- Internal lookups (pre-compiled for hot-loop use) --
+  getAttestationByHash: db.prepare(
+    'SELECT * FROM attestations WHERE hash = ?'
+  ),
+  getMemoryParentId: db.prepare(
+    'SELECT parent_id FROM memories WHERE id = ?'
+  ),
+  getMemoryChildren: db.prepare(
+    'SELECT id FROM memories WHERE parent_id = ?'
+  ),
+  getMemoryContentById: db.prepare(
+    'SELECT content FROM memories WHERE id = ?'
+  ),
+  getMemoryByIdRaw: db.prepare(
+    'SELECT * FROM memories WHERE id = ? AND valid_until IS NULL'
+  ),
+  getMemoryLikeContent: db.prepare(
+    'SELECT id FROM memories WHERE content LIKE ? AND valid_until IS NULL'
+  ),
+  getVecByRowId: db.prepare(
+    'SELECT embedding FROM memories_vec WHERE rowid = ?'
+  ),
+  updateMemoryParentId: db.prepare(
+    'UPDATE memories SET parent_id = ? WHERE id = ?'
+  ),
+  deleteProvenanceByMemoryId: db.prepare(
+    'DELETE FROM provenance WHERE memory_id = ?'
+  ),
+  deleteContradictionsByMemoryId: db.prepare(
+    'DELETE FROM contradictions WHERE old_memory_id = ? OR new_memory_id = ?'
+  ),
+  getReputationScore: db.prepare(
+    'SELECT reputation_score FROM agent_stats WHERE agent_id = ?'
+  ),
+  updateProvenanceOwner: db.prepare(
+    "UPDATE provenance SET source_type = 'agent', source_id = ?, confidence = 1.0 WHERE memory_id = ?"
+  ),
+  archiveMemoryById: db.prepare(
+    'UPDATE memories SET valid_until = unixepoch() WHERE id = ?'
+  ),
+  getEdgesBySourceAndType: db.prepare(`
+    SELECT * FROM edges
+    WHERE (source_id = ? AND source_type = ?)
+       OR (target_id = ? AND target_type = ?)
+  `),
+  getMemoriesByEntityEdges: db.prepare(`
+    SELECT * FROM edges
+    WHERE (source_id = ? AND source_type = 'entity' AND target_type = 'memory')
+       OR (target_id = ? AND target_type = 'entity' AND source_type = 'memory')
+  `),
+  consolidateVecSearch: db.prepare(`
+    SELECT rowid AS id, distance
+    FROM memories_vec
+    WHERE embedding MATCH ?
+    AND k = 30
+  `),
+  archiveAndInsertContradiction: db.prepare(
+    'UPDATE memories SET valid_until = unixepoch() WHERE id = ?'
+  )
 };
+
+export { stmts };
 
 // ============================================================
 // SECRET DETECTION & REDACTION HELPERS
@@ -654,8 +716,8 @@ export function deleteMemory(id) {
   stmts.deleteEdgesByMemory.run(id, id);
   deleteVec(id);  // Remove vector first (no cascades on virtual tables)
   try {
-    db.prepare('DELETE FROM provenance WHERE memory_id = ?').run(id);
-    db.prepare('DELETE FROM contradictions WHERE old_memory_id = ? OR new_memory_id = ?').run(id, id);
+    stmts.deleteProvenanceByMemoryId.run(id);
+    stmts.deleteContradictionsByMemoryId.run(id, id);
   } catch (e) {
     console.error(`[persyst] Clean up provenance/contradictions error: ${e.message}`);
   }
@@ -817,11 +879,7 @@ export function insertEdge(sourceId, targetId, relation, sourceType, targetType)
  * Get all memories linked to an entity.
  */
 export function getMemoriesByEntity(entityId) {
-  const edges = db.prepare(`
-    SELECT * FROM edges 
-    WHERE (source_id = ? AND source_type = 'entity' AND target_type = 'memory')
-       OR (target_id = ? AND target_type = 'entity' AND source_type = 'memory')
-  `).all(entityId, entityId);
+  const edges = stmts.getMemoriesByEntityEdges.all(entityId, entityId);
   const memoryIds = edges.map(e => e.source_type === 'memory' ? e.source_id : e.target_id);
   return memoryIds.map(id => stmts.getById.get(id)).filter(Boolean);
 }
@@ -902,7 +960,7 @@ export function logContradiction(oldMemoryId, newMemoryId, reason = '') {
   try {
     const parentId = Math.min(oldMemoryId, newMemoryId);
     const childId = Math.max(oldMemoryId, newMemoryId);
-    db.prepare('UPDATE memories SET parent_id = ? WHERE id = ?').run(parentId, childId);
+    stmts.updateMemoryParentId.run(parentId, childId);
   } catch (e) {
     console.error(`[persyst] Failed to set parent_id on contradiction: ${e.message}`);
   }
@@ -1015,13 +1073,13 @@ export function getMemoryHistoryChain(memoryId) {
     versions.add(currentId);
 
     // 1. Find parent (ancestor) from memories table
-    const row = db.prepare('SELECT parent_id FROM memories WHERE id = ?').get(currentId);
+    const row = stmts.getMemoryParentId.get(currentId);
     if (row && row.parent_id !== null) {
       if (!versions.has(row.parent_id)) queue.push(row.parent_id);
     }
 
     // 2. Find children (descendants) from memories table
-    const children = db.prepare('SELECT id FROM memories WHERE parent_id = ?').all(currentId);
+    const children = stmts.getMemoryChildren.all(currentId);
     for (const child of children) {
       if (!versions.has(child.id)) queue.push(child.id);
     }

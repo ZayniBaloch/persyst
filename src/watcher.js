@@ -17,7 +17,7 @@ import {
   memoryExists
 } from './database.js';
 import { generateEmbedding } from './embeddings.js';
-import { extractHeuristic } from './extractor-heuristic.js';
+import { extractHeuristic, hasExtractableSignals } from './extractor-heuristic.js';
 import { searchHybrid } from './search.js';
 import { searchCache } from './cache.js';
 import { memoryEventBus } from './events.js';
@@ -135,7 +135,7 @@ async function processJsonlFile(filePath) {
       ) {
         // Strip XML/markdown wrapper tags (like <USER_REQUEST> or <ADDITIONAL_METADATA>)
         const cleanText = record.content.replace(/<[^>]+>[\s\S]*?<\/[^>]+>/g, '').trim();
-        if (cleanText.length < 15) continue;
+        if (cleanText.length < 15 || !hasExtractableSignals(cleanText)) continue;
 
         const facts = extractHeuristic(cleanText);
         for (const fact of facts) {
@@ -171,8 +171,10 @@ async function processJsonlFile(filePath) {
     // Persist the byte offset up to the last successfully parsed complete line.
     // Do not advance past an incomplete trailing line so it is re-read on the next scan.
     upsertWatchPosition(filePath, processedOffset);
+    return addedCount;
   } catch (err) {
     console.error(`[persyst-watcher] Failed to process JSONL file ${filePath}: ${err.message}`);
+    return 0;
   }
 }
 
@@ -200,7 +202,7 @@ async function processJsonFile(filePath) {
     // Process only newly added messages
     for (let i = lastMsgCount; i < history.length; i++) {
       const msg = history[i];
-      if (!msg.content || typeof msg.content !== 'string') continue;
+      if (!msg.content || typeof msg.content !== 'string' || !hasExtractableSignals(msg.content)) continue;
 
       // Filter out system message structures
       if (msg.role === 'user' || msg.role === 'assistant') {
@@ -237,8 +239,10 @@ async function processJsonFile(filePath) {
 
     // Persist message count index
     upsertWatchPosition(filePath, history.length);
+    return addedCount;
   } catch (err) {
     console.error(`[persyst-watcher] Failed to process JSON file ${filePath}: ${err.message}`);
+    return 0;
   }
 }
 
@@ -277,6 +281,7 @@ function findFiles(dir, ext, depth = 3) {
  */
 export async function scanDirectories() {
   const watchDirs = loadWatchedDirs();
+  let totalAdded = 0;
 
   for (const dir of watchDirs) {
     if (!existsSync(dir)) continue;
@@ -284,7 +289,7 @@ export async function scanDirectories() {
     // Scan for JSONL (Antigravity transcripts)
     const jsonlFiles = findFiles(dir, 'transcript.jsonl', 3);
     for (const file of jsonlFiles) {
-      await processJsonlFile(file);
+      totalAdded += await processJsonlFile(file);
     }
 
     // Scan for JSON (Roo Code / Cline task files)
@@ -292,9 +297,29 @@ export async function scanDirectories() {
     for (const file of jsonFiles) {
       // Avoid processing general configurations/settings files
       if (file.includes('tasks')) {
-        await processJsonFile(file);
+        totalAdded += await processJsonFile(file);
       }
     }
+  }
+
+  // Auto-consolidate memories if new ones were added to keep prompt context slim
+  if (totalAdded > 0) {
+    try {
+      console.error(`[persyst-watcher] Running automatic memory consolidation sweep...`);
+      const { consolidateMemories } = await import('./search.js');
+      const report = await consolidateMemories();
+      console.error(`[persyst-watcher] Auto-consolidation complete: merged ${report.consolidated_groups} duplicate groups.`);
+    } catch (e) {
+      console.error(`[persyst-watcher] Auto-consolidation failed: ${e.message}`);
+    }
+  }
+
+  // Run periodic auto-expiry check on every folder scan (fast query)
+  try {
+    const { archiveExpiredMemories } = await import('./database.js');
+    archiveExpiredMemories();
+  } catch (e) {
+    console.error(`[persyst-watcher] Auto-expiry execution failed: ${e.message}`);
   }
 }
 

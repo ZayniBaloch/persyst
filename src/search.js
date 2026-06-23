@@ -228,6 +228,13 @@ function applyMMR(candidates, limit, lambda = 0.7) {
  * @param {string|null} sessionId - Current session ID
  */
 export async function getOptimizedContext(queryText, maxTokens, agentId = null, sessionId = null, namespace = null, intentParam = null) {
+  // Classify intent and urgency early to adjust token budget dynamically
+  const { intent, urgency } = classifyIntentAndUrgency(queryText, intentParam);
+  let targetMaxTokens = maxTokens;
+  if (intent === 'general' || intent === 'testing') {
+    targetMaxTokens = Math.min(maxTokens, 1500);
+  }
+
   // Extract entities mentioned in the query text to seed the graph search directly
   const entities = getAllEntities(100);
   const matchedEntityIds = new Set();
@@ -402,17 +409,15 @@ export async function getOptimizedContext(queryText, maxTokens, agentId = null, 
     }
     if (isRedundant) continue;
 
-    // Heuristic: ~4 characters per token + format headers (~15 tokens)
-    const estimatedTokens = Math.max(1, Math.ceil(c.content.length / 4) + 15);
-    if (currentTokens + estimatedTokens > maxTokens) {
+    // Heuristic: ~4 characters per token + format headers (~3 tokens for compact format)
+    const estimatedTokens = Math.max(1, Math.ceil(c.content.length / 4) + 3);
+    if (currentTokens + estimatedTokens > targetMaxTokens) {
       continue;
     }
     currentTokens += estimatedTokens;
     accepted.push(c);
   }
 
-  // Classify intent and urgency based on query text and parameters
-  const { intent, urgency } = classifyIntentAndUrgency(queryText, intentParam);
   const suggested_actions = generateSuggestedActions(accepted, intent, urgency);
 
   // 6. Format LLM injection context string
@@ -432,11 +437,7 @@ export async function getOptimizedContext(queryText, maxTokens, agentId = null, 
     context += 'No relevant memories retrieved.\n';
   } else {
     for (const a of accepted) {
-      let sourceTag = 'Source: manual';
-      if (a.provenance) {
-        sourceTag = `Source: ${a.provenance.source_type}${a.provenance.source_id ? ` (${a.provenance.source_id})` : ''}`;
-      }
-      context += `[Memory #${a.id}] (Score: ${a.score.toFixed(4)}, ${sourceTag})\n${a.content}\n---\n`;
+      context += `#${a.id}: ${a.content}\n`;
     }
   }
   context += '=== END OF CONTEXT ===';

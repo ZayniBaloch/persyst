@@ -4,13 +4,15 @@ import { join } from 'path';
 import { writeFileSync, readFileSync, mkdirSync, rmSync, existsSync } from 'fs';
 import db, { closeDatabase, getMemoryById, getWatchPosition } from '../src/database.js';
 import { extractHeuristic } from '../src/extractor-heuristic.js';
-import { scanDirectories, loadWatchedDirs } from '../src/watcher.js';
 
 const TEST_DIR = join(process.cwd(), 'test_watcher_temp');
 const CONFIG_PATH = join(TEST_DIR, 'persyst-config.json');
 
 // Point the watcher at an isolated config file so we never touch the user's real config.
 process.env.PERSYST_CONFIG_FILE = CONFIG_PATH;
+
+// Dynamically import to ensure process.env.PERSYST_CONFIG_FILE is set before evaluating the module
+const { scanDirectories, loadWatchedDirs } = await import('../src/watcher.js');
 
 test.before(() => {
   // Clear tables

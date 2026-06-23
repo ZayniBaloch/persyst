@@ -496,7 +496,14 @@ const stmts = {
   `),
   archiveAndInsertContradiction: db.prepare(
     'UPDATE memories SET valid_until = unixepoch() WHERE id = ?'
-  )
+  ),
+  archiveExpiredTransientMemories: db.prepare(`
+    UPDATE memories 
+    SET valid_until = unixepoch() 
+    WHERE valid_until IS NULL 
+      AND (content LIKE 'Reminder:%' OR content LIKE 'Note:%') 
+      AND (unixepoch() - created_at) > 1209600
+  `)
 };
 
 export { stmts };
@@ -1157,11 +1164,33 @@ export function upsertWatchPosition(filePath, position) {
 // ============================================================
 
 /**
+ * Archive transient memories (reminders and notes) older than 14 days.
+ * Returns the count of archived memories.
+ */
+export function archiveExpiredMemories() {
+  try {
+    const info = stmts.archiveExpiredTransientMemories.run();
+    if (info.changes > 0) {
+      console.error(`[persyst] Archived ${info.changes} expired transient memories (Note/Reminder older than 14 days).`);
+    }
+    return info.changes;
+  } catch (e) {
+    console.error(`[persyst] Failed to archive expired memories: ${e.message}`);
+    return 0;
+  }
+}
+
+/**
  * Close the database connection. Call on shutdown.
  */
 export function closeDatabase() {
   db.close();
   console.error('[persyst] Database closed');
 }
+
+// Run auto-expiry cleanup on database startup to prune transient bloat immediately
+try {
+  archiveExpiredMemories();
+} catch (_) {}
 
 export default db;

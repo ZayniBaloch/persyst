@@ -425,15 +425,18 @@ export function extractHeuristic(text, options = {}) {
     return [];
   }
 
+  // Strip all markdown fenced code blocks to prevent extracting facts from example code/logs
+  const cleanSourceText = text.replace(/```[\s\S]*?```/g, '');
+
   // --- Step 1: Explicit saves (highest priority, no filter) ---
-  const explicitFacts = extractExplicitSaves(text);
+  const explicitFacts = extractExplicitSaves(cleanSourceText);
 
   // --- Step 2: Implicit pattern matching (filtered, tech-required) ---
   const implicitFacts = [];
   const seen = new Set(explicitFacts.map(f => f.content.toLowerCase().replace(/\s+/g, ' ').trim()));
 
   // Process line-by-line to filter code/noise
-  const lines = text.split('\n');
+  const lines = cleanSourceText.split('\n');
   const cleanLines = lines.filter(line => !isNoiseLine(line));
   const cleanText = cleanLines.join('\n');
 

@@ -18,7 +18,7 @@ for (const file of files) {
 
   const result = spawnSync(
     process.execPath,
-    ['--test', file],
+    ['--max-old-space-size=4096', '--test', file],
     {
       stdio: 'inherit',
       env: { ...process.env, NODE_ENV: 'test' },

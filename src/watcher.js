@@ -22,8 +22,8 @@ import { searchHybrid } from './search.js';
 import { searchCache } from './cache.js';
 import { memoryEventBus } from './events.js';
 
-// Config path: ~/.persyst/config.json
-const CONFIG_FILE = join(homedir(), '.persyst', 'config.json');
+// Config path: ~/.persyst/config.json (overridable for tests)
+const CONFIG_FILE = process.env.PERSYST_CONFIG_FILE || join(homedir(), '.persyst', 'config.json');
 
 let intervalId = null;
 const DEDUP_THRESHOLD = 0.80;
@@ -103,17 +103,30 @@ async function processJsonlFile(filePath) {
 
     const lines = text.split('\n');
     let addedCount = 0;
+    let processedOffset = lastPos;
 
-    for (const line of lines) {
-      if (!line.trim()) continue;
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      const isLastLine = i === lines.length - 1;
+
+      // Empty trailing line after a newline is expected; skip it without treating it as partial.
+      if (!line.trim()) {
+        if (!isLastLine) processedOffset += line.length + 1;
+        continue;
+      }
 
       let record;
       try {
         record = JSON.parse(line);
       } catch (_) {
-        // Line might be incomplete/partially written — skip and parse next time
+        // If the last line fails to parse, it may be partially written. Leave processedOffset
+        // before this line so the next scan re-reads it from the start.
+        if (!isLastLine) processedOffset += line.length + 1;
         continue;
       }
+
+      // Commit the bytes for this line (including the newline that produced the split).
+      processedOffset += line.length + 1;
 
       // Check if it's user prompt or assistant response
       if (
@@ -155,8 +168,9 @@ async function processJsonlFile(filePath) {
       searchCache.invalidate();
     }
 
-    // Persist new byte offset position
-    upsertWatchPosition(filePath, stat.size);
+    // Persist the byte offset up to the last successfully parsed complete line.
+    // Do not advance past an incomplete trailing line so it is re-read on the next scan.
+    upsertWatchPosition(filePath, processedOffset);
   } catch (err) {
     console.error(`[persyst-watcher] Failed to process JSONL file ${filePath}: ${err.message}`);
   }

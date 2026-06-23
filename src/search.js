@@ -19,6 +19,7 @@ import db, {
 import { generateEmbedding } from './embeddings.js';
 import { createAttestation } from './attestation.js';
 import { searchCache, LRUCache } from './cache.js';
+import { jaccardSimilarity } from './text-utils.js';
 
 let lastDataVersion = 0;
 
@@ -68,7 +69,7 @@ export async function searchHybrid(queryText, limit = 5, agentId = null, session
   const vecHits = searchVector(queryEmbedding, parsedLimit * 2);
 
   const semanticResults = vecHits.map(r => ({
-    id: r.rowid,
+    id: Number(r.rowid),
     distance: r.distance,
     // Convert L2 distance to 0-1 similarity score
     similarity: Math.max(0, 1 - (r.distance * r.distance) / 2)
@@ -215,27 +216,6 @@ function applyMMR(candidates, limit, lambda = 0.7) {
   }
 
   return selected;
-}
-
-/**
- * Compute Jaccard similarity between two text strings.
- * Uses word-level tokenization for efficiency.
- * 
- * @param {string} a - First text
- * @param {string} b - Second text
- * @returns {number} Similarity score between 0 and 1
- */
-function jaccardSimilarity(a, b) {
-  const wordsA = new Set(a.toLowerCase().split(/\s+/));
-  const wordsB = new Set(b.toLowerCase().split(/\s+/));
-  
-  let intersection = 0;
-  for (const word of wordsA) {
-    if (wordsB.has(word)) intersection++;
-  }
-  
-  const union = wordsA.size + wordsB.size - intersection;
-  return union === 0 ? 0 : intersection / union;
 }
 
 /**
@@ -532,12 +512,13 @@ export async function consolidateMemories(namespace = null) {
   const consolidated = [];
   const visited = new Set();
 
-  for (const mem of activeMemories) {
-    if (visited.has(mem.id)) continue;
+  // Wrap all mutations in a transaction so a partial failure rolls back.
+  const consolidateOne = db.transaction((mem) => {
+    if (visited.has(mem.id)) return;
 
     // Search for similar memories
     const embedding = db.prepare('SELECT embedding FROM memories_vec WHERE rowid = ?').get(mem.id);
-    if (!embedding) continue;
+    if (!embedding) return;
 
     const hits = db.prepare(`
       SELECT rowid AS id, distance
@@ -583,25 +564,11 @@ export async function consolidateMemories(namespace = null) {
         const rel = checkRelationship(canonical.content, current.content);
 
         if (rel.type === 'contradiction') {
-          // Resolve contradiction: keep canonical, archive current
+          // Resolve contradiction: keep canonical, archive current.
+          // logContradiction already updates agent stats, so we only record the archive here.
           db.prepare('UPDATE memories SET valid_until = unixepoch() WHERE id = ?').run(current.id);
           db.prepare('INSERT INTO contradictions (old_memory_id, new_memory_id, resolution_reason) VALUES (?, ?, ?)')
             .run(current.id, canonical.id, `Consolidated contradiction: resolved in favor of canonical #${canonical.id}`);
-
-          // Apply reputation changes since it's a cross-agent contradiction
-          const oldProv = getProvenance(current.id);
-          const newProv = getProvenance(canonical.id);
-          if (oldProv && oldProv.source_type === 'agent' && oldProv.source_id) {
-            const isSelf = newProv && newProv.source_type === 'agent' && newProv.source_id === oldProv.source_id;
-            if (!isSelf) {
-              db.prepare('UPDATE agent_stats SET memories_contradicted = memories_contradicted + 1 WHERE agent_id = ?').run(oldProv.source_id);
-              db.prepare('UPDATE agent_stats SET reputation_score = (memories_confirmed + 1.0) / (memories_contradicted + 1.0) WHERE agent_id = ?').run(oldProv.source_id);
-              if (newProv && newProv.source_type === 'agent') {
-                db.prepare('UPDATE agent_stats SET memories_confirmed = memories_confirmed + 1 WHERE agent_id = ?').run(newProv.source_id);
-                db.prepare('UPDATE agent_stats SET reputation_score = (memories_confirmed + 1.0) / (memories_contradicted + 1.0) WHERE agent_id = ?').run(newProv.source_id);
-              }
-            }
-          }
 
           archivedIds.push(current.id);
           visited.add(current.id);
@@ -641,6 +608,10 @@ export async function consolidateMemories(namespace = null) {
         });
       }
     }
+  });
+
+  for (const mem of activeMemories) {
+    consolidateOne(mem);
   }
 
   return {

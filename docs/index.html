@@ -460,14 +460,15 @@
                   <li style="margin-bottom: 0.5rem;">Set Name to <code>persyst</code>.</li>
                   <li style="margin-bottom: 0.5rem;">Set Type to <strong>STDIO</strong>.</li>
                   <li style="margin-bottom: 0.5rem;">Set Command to <code>npx</code>.</li>
-                  <li style="margin-bottom: 0.5rem;">In the <strong>Parameters</strong> text area, paste the following line-by-line configuration exactly:
+                  <li style="margin-bottom: 0.5rem;">In the <strong>Parameters</strong> text area, paste the following line-by-line configuration, replacing the Node.js and Persyst paths with the absolute paths on your machine:
                     <div class="code-wrapper" style="margin-top: 0.5rem;">
                       <pre><code id="code-qwen-params">-y
 cross-env
-C:\PROGRA~1\nodejs\node.exe
-c:\Users\Super\Desktop\Peryst\index.js</code></pre>
+&lt;path-to-your-node.exe&gt;
+&lt;path-to-peryst&gt;/index.js</code></pre>
                       <button class="copy-code-btn" data-clipboard="code-qwen-params" aria-label="Copy code"><i data-feather="copy" class="icon-sm"></i></button>
                     </div>
+                    <p style="margin-top: 0.5rem; font-size: 0.85rem;">Tip: run <code>where node</code> in Command Prompt and <code>cd</code> into your Persyst clone to find these paths.</p>
                   </li>
                   <li style="margin-bottom: 0.5rem;">Leave the <strong>Environment Variables</strong> box completely blank.</li>
                   <li style="margin-bottom: 0.5rem;">Click <strong>Save and enable</strong>.</li>

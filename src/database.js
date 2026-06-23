@@ -63,27 +63,32 @@ db.exec(`
 `);
 
 // --- Migrations for bi-temporal validity on existing tables ---
-try {
+function columnExists(table, name) {
+  const info = db.prepare(`PRAGMA table_info(${table})`).all();
+  return info.some(col => col.name === name);
+}
+
+if (!columnExists('memories', 'valid_from')) {
   db.exec('ALTER TABLE memories ADD COLUMN valid_from INTEGER DEFAULT (unixepoch())');
-} catch (e) { /* Column already exists */ }
+}
 
-try {
+if (!columnExists('memories', 'valid_until')) {
   db.exec('ALTER TABLE memories ADD COLUMN valid_until INTEGER DEFAULT NULL');
-} catch (e) { /* Column already exists */ }
+}
 
-try {
+if (!columnExists('memories', 'assertion_time')) {
   db.exec('ALTER TABLE memories ADD COLUMN assertion_time INTEGER DEFAULT (unixepoch())');
-} catch (e) { /* Column already exists */ }
+}
 
 // --- Migration: add namespace column for per-agent isolation ---
-try {
+if (!columnExists('memories', 'namespace')) {
   db.exec("ALTER TABLE memories ADD COLUMN namespace TEXT DEFAULT 'shared'");
-} catch (e) { /* Column already exists */ }
+}
 
 // --- Migration: add parent_id column for history tracing ---
-try {
+if (!columnExists('memories', 'parent_id')) {
   db.exec('ALTER TABLE memories ADD COLUMN parent_id INTEGER DEFAULT NULL');
-} catch (e) { /* Column already exists */ }
+}
 
 // --- Index on namespace for fast filtered queries ---
 try {
@@ -367,6 +372,11 @@ const stmts = {
   deleteEntity: db.prepare(
     'DELETE FROM entities WHERE id = ?'
   ),
+  deleteEdgesByEntity: db.prepare(
+    `DELETE FROM edges WHERE
+     (source_id = ? AND source_type = 'entity') OR
+     (target_id = ? AND target_type = 'entity')`
+  ),
 
   // -- Edges --
   insertEdge: db.prepare(
@@ -608,10 +618,9 @@ export function getAnyMemoryById(id) {
  * @returns {object|null} The memory row, or null if not found
  */
 export function getMemoryById(id, namespace = null) {
-  const ns = namespace || 'shared';
-  const memory = ns === 'all'
-    ? stmts.getById.get(id)
-    : stmts.getByIdNs.get(id, ns);
+  const memory = namespace
+    ? stmts.getByIdNs.get(id, namespace)
+    : stmts.getById.get(id);
   if (memory) {
     memory.provenance = getProvenance(id);
   }
@@ -793,6 +802,7 @@ export function getAllEntities(limit = 50) {
  * Delete an entity and its edges.
  */
 export function deleteEntity(id) {
+  stmts.deleteEdgesByEntity.run(id, id);
   stmts.deleteEntity.run(id);
 }
 
@@ -874,7 +884,7 @@ export function getMemoryByContent(content, namespace = null) {
   const row = namespace
     ? stmts.findMemoryByContentNs.get(content, namespace)
     : stmts.findMemoryByContent.get(content);
-  return row ? getMemoryById(row.id) : null;
+  return row ? getMemoryById(row.id, namespace) : null;
 }
 
 // ============================================================

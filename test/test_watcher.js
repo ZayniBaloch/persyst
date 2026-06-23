@@ -7,6 +7,10 @@ import { extractHeuristic } from '../src/extractor-heuristic.js';
 import { scanDirectories, loadWatchedDirs } from '../src/watcher.js';
 
 const TEST_DIR = join(process.cwd(), 'test_watcher_temp');
+const CONFIG_PATH = join(TEST_DIR, 'persyst-config.json');
+
+// Point the watcher at an isolated config file so we never touch the user's real config.
+process.env.PERSYST_CONFIG_FILE = CONFIG_PATH;
 
 test.before(() => {
   // Clear tables
@@ -21,6 +25,7 @@ test.after(() => {
       rmSync(TEST_DIR, { recursive: true, force: true });
     }
   } catch (_) {}
+  delete process.env.PERSYST_CONFIG_FILE;
 });
 
 test('Cognitive Noise Filter & Log Watcher', async (t) => {
@@ -52,20 +57,10 @@ test('Cognitive Noise Filter & Log Watcher', async (t) => {
 
   await t.test('Log Watcher: parses new JSONL transcript appends and tracks offsets', async () => {
     const transcriptFile = join(TEST_DIR, 'transcript.jsonl');
-    
-    // Override CONFIG_FILE watch dirs by mock CONFIG_FILE or hacking watcher state
-    // Let's create the ~/.persyst/config.json mock or configure watched dirs
-    const configPath = join(process.env.USERPROFILE || process.env.HOME || '~', '.persyst', 'config.json');
-    let originalConfig = null;
-    try {
-      if (existsSync(configPath)) {
-        originalConfig = readFileSync(configPath, 'utf8');
-      }
-    } catch (_) {}
 
-    // Write mock config pointing to our TEST_DIR
+    // Write isolated mock config pointing to our TEST_DIR
     const testConfig = { watch_dirs: [TEST_DIR.replace(/\\/g, '/')] };
-    writeFileSync(configPath, JSON.stringify(testConfig, null, 2));
+    writeFileSync(CONFIG_PATH, JSON.stringify(testConfig, null, 2));
 
     // 1. Write initial lines to transcript
     const line1 = JSON.stringify({
@@ -119,13 +114,6 @@ test('Cognitive Noise Filter & Log Watcher', async (t) => {
 
     const tailwindMem = db.prepare("SELECT * FROM memories WHERE content LIKE '%TailwindCSS%'").get();
     assert.ok(tailwindMem);
-
-    // Restore original config
-    if (originalConfig) {
-      writeFileSync(configPath, originalConfig);
-    } else {
-      try { rmSync(configPath, { force: true }); } catch (_) {}
-    }
   });
 
 });

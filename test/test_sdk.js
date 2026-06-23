@@ -3,13 +3,38 @@ import assert from 'node:assert/strict';
 import { spawn } from 'child_process';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
+import http from 'http';
 import { Persyst } from '../src/sdk.js';
 import db, { closeDatabase } from '../src/database.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const serverPath = join(__dirname, '..', 'index.js');
-const TEST_PORT = 4322;
+const TEST_PORT = 4325;
+
+/**
+ * Poll the gateway /health endpoint until it responds or a timeout is reached.
+ */
+async function waitForGateway(port, timeoutMs = 60000) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    try {
+      await new Promise((resolve, reject) => {
+        const req = http.get(`http://127.0.0.1:${port}/health`, (res) => {
+          res.resume();
+          if (res.statusCode === 200) resolve();
+          else reject(new Error(`Unexpected status ${res.statusCode}`));
+        });
+        req.on('error', reject);
+        req.setTimeout(1000, () => reject(new Error('Timeout')));
+      });
+      return;
+    } catch (_) {
+      await new Promise(r => setTimeout(r, 250));
+    }
+  }
+  throw new Error(`Gateway did not become ready on port ${port} within ${timeoutMs}ms`);
+}
 
 test.before(() => {
   // Clear any existing test data in main process memory
@@ -83,13 +108,19 @@ test('Persyst Developer SDK & Context Upgrades', async (t) => {
     // Start HTTP server in a separate process in test environment
     const serverProcess = spawn('node', [serverPath], {
       env: { ...process.env, PORT: TEST_PORT, NODE_ENV: 'test' },
-      stdio: 'inherit'
+      stdio: 'pipe'
     });
 
-    // Wait for HTTP Gateway server to spin up
-    await new Promise(resolve => setTimeout(resolve, 3000));
+    let serverOutput = '';
+    serverProcess.stderr.on('data', chunk => { serverOutput += chunk.toString(); });
+    serverProcess.stdout.on('data', chunk => { serverOutput += chunk.toString(); });
+
+    const serverExited = new Promise(resolve => serverProcess.on('exit', resolve));
 
     try {
+      // Wait for HTTP Gateway server to spin up (polls /health, tolerant of model load time)
+      await waitForGateway(TEST_PORT);
+
       // Force gateway mode or let it autodetect (will autodetect gateway since port 4321 is now active)
       const sdk = new Persyst({ mode: 'gateway', port: TEST_PORT });
 
@@ -119,7 +150,16 @@ test('Persyst Developer SDK & Context Upgrades', async (t) => {
     } finally {
       // Cleanup: Stop the server process
       serverProcess.kill('SIGTERM');
-      await new Promise(resolve => setTimeout(resolve, 500));
+      await Promise.race([
+        serverExited,
+        new Promise(resolve => setTimeout(resolve, 2000))
+      ]);
+      if (!serverProcess.killed && serverProcess.exitCode === null) {
+        serverProcess.kill('SIGKILL');
+      }
+      if (serverProcess.exitCode !== 0 && serverProcess.exitCode !== null) {
+        console.error('Gateway server output:', serverOutput);
+      }
     }
   });
 });

@@ -46,6 +46,7 @@ import db, {
   getNamespaceStats
 } from './database.js';
 import { searchHybrid, getOptimizedContext, consolidateMemories } from './search.js';
+import { jaccardDistance } from './text-utils.js';
 import { getRecentCommits } from './git.js';
 import { verifyChainIntegrity } from './attestation.js';
 import { searchCache } from './cache.js';
@@ -324,11 +325,13 @@ export function registerTools(server) {
     'get_memory',
     'Get a specific memory by its ID. Boosts its importance automatically.',
     {
-      id: z.number().describe('Memory ID to retrieve')
+      id: z.number().describe('Memory ID to retrieve'),
+      agent_id: z.string().optional().describe('Agent ID — restricts access to this agent\'s namespace + shared')
     },
-    async ({ id }) => {
+    async ({ id, agent_id }) => {
       try {
-        const memory = getMemory(id);
+        const namespace = agent_id ? agent_id.toLowerCase() : null;
+        const memory = getMemory(id, namespace);
         if (!memory) return text({ error: `Memory #${id} not found` });
         return text(memory);
       } catch (err) {
@@ -359,7 +362,8 @@ export function registerTools(server) {
           return text({ error: validation.error });
         }
 
-        const oldMemory = getMemory(id);
+        const namespace = normalizedAgentId;
+        const oldMemory = getMemory(id, namespace);
         if (!oldMemory) return text({ error: `Memory #${id} not found` });
 
         // Retrieve old agent_id from provenance
@@ -388,6 +392,9 @@ export function registerTools(server) {
         // Feature 1: Invalidate search cache on write
         searchCache.invalidate();
 
+        // Broadcast update to SSE subscribers
+        memoryEventBus.emit('memory_updated', { old_id: id, new_id: newId, namespace: oldMemory.namespace || 'shared' });
+
         return text({
           success: true,
           id: newId,
@@ -404,10 +411,15 @@ export function registerTools(server) {
     'delete_memory',
     'Permanently delete a memory by its ID.',
     {
-      id: z.number().describe('Memory ID to delete')
+      id: z.number().describe('Memory ID to delete'),
+      agent_id: z.string().optional().describe('Agent ID — restricts deletion to this agent\'s namespace + shared')
     },
-    async ({ id }) => {
+    async ({ id, agent_id }) => {
       try {
+        const namespace = agent_id ? agent_id.toLowerCase() : null;
+        const memory = getMemory(id, namespace);
+        if (!memory) return text({ error: `Memory #${id} not found` });
+
         const deleted = deleteMemory(id);
         if (!deleted) return text({ error: `Memory #${id} not found` });
 
@@ -415,7 +427,7 @@ export function registerTools(server) {
         searchCache.invalidate();
 
         // Broadcast deletion to SSE subscribers
-        memoryEventBus.emit('memory_deleted', { id });
+        memoryEventBus.emit('memory_deleted', { id, namespace: memory.namespace || 'shared' });
 
         return text({ success: true, id, message: `Memory #${id} deleted` });
       } catch (err) {
@@ -552,14 +564,16 @@ export function registerTools(server) {
     {
       entity_name: z.string().describe('Name of the entity'),
       memory_id: z.number().describe('ID of the memory to link'),
-      relation: z.string().default('mentions').describe('Relationship type')
+      relation: z.string().default('mentions').describe('Relationship type'),
+      agent_id: z.string().optional().describe('Agent ID — restricts linking to this agent\'s namespace + shared')
     },
-    async ({ entity_name, memory_id, relation }) => {
+    async ({ entity_name, memory_id, relation, agent_id }) => {
       try {
+        const namespace = agent_id ? agent_id.toLowerCase() : null;
         const entity = getEntityByName(entity_name);
         if (!entity) return text({ error: `Entity "${entity_name}" not found.` });
 
-        const memory = getMemory(memory_id);
+        const memory = getMemory(memory_id, namespace);
         if (!memory) return text({ error: `Memory #${memory_id} not found` });
 
         insertEdge(entity.id, memory_id, relation, 'entity', 'memory');
@@ -835,27 +849,6 @@ function text(data) {
   return {
     content: [{ type: 'text', text: JSON.stringify(data, null, 2) }]
   };
-}
-
-/**
- * Compute Jaccard distance between two text strings.
- * Used for contradiction detection — higher distance means more different content.
- * @param {string} a - First text
- * @param {string} b - Second text
- * @returns {number} Distance score between 0 (identical) and 1 (completely different)
- */
-function jaccardDistance(a, b) {
-  const wordsA = new Set(a.toLowerCase().split(/\s+/));
-  const wordsB = new Set(b.toLowerCase().split(/\s+/));
-
-  let intersection = 0;
-  for (const word of wordsA) {
-    if (wordsB.has(word)) intersection++;
-  }
-
-  const union = wordsA.size + wordsB.size - intersection;
-  if (union === 0) return 0;
-  return 1 - (intersection / union);
 }
 
 /**

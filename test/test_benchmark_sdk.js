@@ -17,7 +17,31 @@ import db, { closeDatabase } from '../src/database.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const serverPath = join(__dirname, '..', 'index.js');
-const TEST_PORT = 4323; // Isolated port
+const TEST_PORT = 4326; // Isolated port
+
+/**
+ * Poll the gateway /health endpoint until it responds or a timeout is reached.
+ */
+async function waitForGateway(port, timeoutMs = 60000) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    try {
+      await new Promise((resolve, reject) => {
+        const req = http.get(`http://127.0.0.1:${port}/health`, (res) => {
+          res.resume();
+          if (res.statusCode === 200) resolve();
+          else reject(new Error(`Unexpected status ${res.statusCode}`));
+        });
+        req.on('error', reject);
+        req.setTimeout(1000, () => reject(new Error('Timeout')));
+      });
+      return;
+    } catch (_) {
+      await new Promise(r => setTimeout(r, 250));
+    }
+  }
+  throw new Error(`Gateway did not become ready on port ${port} within ${timeoutMs}ms`);
+}
 
 // Helpers to format stats
 function median(values) {
@@ -148,11 +172,25 @@ async function run() {
 
   // Spawn gateway server for benchmarking
   const serverProcess = spawn('node', [serverPath], {
-    env: { ...process.env, PORT: TEST_PORT, NODE_ENV: 'test' }
+    env: { ...process.env, PORT: TEST_PORT, NODE_ENV: 'test' },
+    stdio: 'pipe'
   });
 
-  // Wait for HTTP Gateway server to spin up
-  await new Promise(resolve => setTimeout(resolve, 3000));
+  let serverOutput = '';
+  serverProcess.stderr.on('data', chunk => { serverOutput += chunk.toString(); });
+  serverProcess.stdout.on('data', chunk => { serverOutput += chunk.toString(); });
+
+  const serverExited = new Promise(resolve => serverProcess.on('exit', resolve));
+
+  // Wait for HTTP Gateway server to spin up (polls /health, tolerant of model load time)
+  try {
+    await waitForGateway(TEST_PORT);
+  } catch (err) {
+    serverProcess.kill('SIGTERM');
+    await Promise.race([serverExited, new Promise(resolve => setTimeout(resolve, 2000))]);
+    console.error('Gateway server output:', serverOutput);
+    throw err;
+  }
 
   const libSdk = new Persyst({ mode: 'library' });
   const gwSdk = new Persyst({ mode: 'gateway', port: TEST_PORT });
@@ -190,7 +228,13 @@ async function run() {
 
   // Shutdown test gateway
   serverProcess.kill('SIGTERM');
-  await new Promise(resolve => setTimeout(resolve, 500));
+  await Promise.race([
+    serverExited,
+    new Promise(resolve => setTimeout(resolve, 2000))
+  ]);
+  if (!serverProcess.killed && serverProcess.exitCode === null) {
+    serverProcess.kill('SIGKILL');
+  }
 
   // Print Benchmark Reports
   console.log('\n============================================================');

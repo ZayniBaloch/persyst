@@ -4,7 +4,7 @@ import { join } from 'path';
 
 const testDir = './test';
 const files = readdirSync(testDir)
-  .filter(f => f.startsWith('test_') && f.endsWith('.js'))
+  .filter(f => (f.startsWith('test_') || f === 'smoke.js') && f.endsWith('.js'))
   .sort()
   .map(f => join(testDir, f));
 
@@ -15,12 +15,17 @@ for (const file of files) {
   console.log(`\n========================================`);
   console.log(`Running: ${file}`);
   console.log(`========================================`);
-  
-  const result = spawnSync('npx', ['cross-env', 'NODE_ENV=test', 'node', '--test', file], {
-    stdio: 'inherit',
-    shell: true
-  });
-  
+
+  const result = spawnSync(
+    process.execPath,
+    ['--test', file],
+    {
+      stdio: 'inherit',
+      env: { ...process.env, NODE_ENV: 'test' },
+      shell: false
+    }
+  );
+
   if (result.status !== 0) {
     console.error(`❌ Test file failed: ${file}`);
     failed = true;

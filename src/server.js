@@ -421,7 +421,8 @@ async function handlePostRequest(req, res, payload) {
   // POST /verify — chain integrity check
   // ----------------------------------------------------------
   if (path === '/verify') {
-    const result = await verifyChainIntegrity();
+    const attestationId = payload?.attestation_id;
+    const result = verifyChainIntegrity(attestationId);
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify(result));
     return;

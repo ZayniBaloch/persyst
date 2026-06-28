@@ -39,3 +39,14 @@ export function jaccardSimilarity(a, b) {
 export function jaccardDistance(a, b) {
   return 1 - jaccardSimilarity(a, b);
 }
+
+/**
+ * Log informational messages to stderr only when PERSYST_DEBUG or DEBUG is enabled.
+ * Prevents MCP hosts (Cursor, Antigravity, VS Code) from treating startup info logs as MCP errors.
+ */
+export function logInfo(...args) {
+  if (process.env.PERSYST_DEBUG || process.env.DEBUG) {
+    console.error(...args);
+  }
+}
+

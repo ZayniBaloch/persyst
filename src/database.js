@@ -17,6 +17,8 @@ import { join } from 'path';
 import { homedir } from 'os';
 import { mkdirSync } from 'fs';
 
+import { logInfo } from './text-utils.js';
+
 // ============================================================
 // DATABASE LOCATION
 // Store in ~/.persyst/ per default to persist across sessions
@@ -41,7 +43,7 @@ db.pragma('cache_size = -64000');   // 64MB cache size
 // Load sqlite-vec BEFORE creating any vec0 tables
 sqliteVec.load(db);
 
-console.error(`[persyst] Database: ${DB_PATH}`);
+logInfo(`[persyst] Database: ${DB_PATH}`);
 
 // ============================================================
 // CREATE TABLES & SCHEMA MIGRATIONS
@@ -229,7 +231,7 @@ db.exec(`
   )
 `);
 
-console.error('[persyst] Schema initialized ✓');
+logInfo('[persyst] Schema initialized ✓');
 
 // ============================================================
 // PREPARED STATEMENTS
@@ -657,13 +659,12 @@ export function insertVector(id, embedding) {
  * @returns {object|null} The memory row, or null if not found
  */
 export function getMemory(id, namespace = null) {
-  const memory = namespace
-    ? stmts.getByIdNs.get(id, namespace)
-    : stmts.getById.get(id);
+  const memory = (namespace === 'all' || namespace === null)
+    ? stmts.getById.get(id)
+    : stmts.getByIdNs.get(id, namespace);
   if (memory) {
     boostMemory(id);
-    const prov = getProvenance(id);
-    memory.provenance = prov;
+    memory.provenance = getProvenance(id);
   }
   return memory || null;
 }
@@ -687,9 +688,9 @@ export function getAnyMemoryById(id) {
  * @returns {object|null} The memory row, or null if not found
  */
 export function getMemoryById(id, namespace = null) {
-  const memory = namespace
-    ? stmts.getByIdNs.get(id, namespace)
-    : stmts.getById.get(id);
+  const memory = (namespace === 'all' || namespace === null)
+    ? stmts.getById.get(id)
+    : stmts.getByIdNs.get(id, namespace);
   if (memory) {
     memory.provenance = getProvenance(id);
   }

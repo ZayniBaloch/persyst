@@ -11,3 +11,12 @@ dist/
 *.log
 test_watcher_temp/
 .mcp.json
+
+# Local generated rules & IDE agent configs
+.agents/
+.cursorrules
+.windsurfrules
+.clinerules
+.persystrules.md
+PERYST_TECHNICAL_MANUAL.pdf
+

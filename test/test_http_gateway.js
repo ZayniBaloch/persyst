@@ -65,6 +65,36 @@ function makeRequest(path, payload) {
   });
 }
 
+function makeGetRequest(path) {
+  return new Promise((resolve, reject) => {
+    const req = http.request({
+      hostname: '127.0.0.1',
+      port: TEST_PORT,
+      path: path,
+      method: 'GET'
+    });
+
+    req.on('response', (res) => {
+      let data = '';
+      res.on('data', chunk => { data += chunk; });
+      res.on('end', () => {
+        try {
+          const isJson = res.headers['content-type'] && res.headers['content-type'].includes('application/json');
+          resolve({
+            statusCode: res.statusCode,
+            body: isJson ? JSON.parse(data || '{}') : data
+          });
+        } catch (e) {
+          reject(new Error(`Failed to parse response: ${e.message}. Raw: ${data}`));
+        }
+      });
+    });
+
+    req.on('error', reject);
+    req.end();
+  });
+}
+
 async function runTests() {
   console.log('\n🧪 Persyst HTTP Gateway Integration Test\n');
 
@@ -185,6 +215,19 @@ async function runTests() {
     console.log(`     Latency measurements (ms): ${latencies.map(l => l.toFixed(2)).join(', ')}`);
     console.log(`     Median Latency: ${medianLatency.toFixed(2)} ms`);
     assert(medianLatency < 15, `Median latency is under 15ms (Actual: ${medianLatency.toFixed(2)} ms)`);
+
+    // 7. Test /compliance/export endpoint
+    console.log('\n📜 Test 6: Export compliance audit trail (JSON & Markdown)');
+    const complianceJson = await makeGetRequest('/compliance/export');
+    assert(complianceJson.statusCode === 200, 'Compliance export JSON status is 200');
+    assert(complianceJson.body.summary !== undefined, 'Response includes summary');
+    assert(complianceJson.body.summary.system_integrity === 'SECURE', 'System cryptographic status is SECURE');
+    assert(Array.isArray(complianceJson.body.agent_stats), 'Response includes agent stats list');
+
+    const complianceMd = await makeGetRequest('/compliance/export?format=markdown');
+    assert(complianceMd.statusCode === 200, 'Compliance export Markdown status is 200');
+    assert(typeof complianceMd.body === 'string' && complianceMd.body.includes('# Persyst Cryptographic Compliance Export'), 'Response is valid Markdown');
+    assert(complianceMd.body.includes('System cryptographic status: **SECURE**'), 'Markdown includes correct security status');
 
     // Cleanup added memory
     console.log('\n🧹 Cleaning up test memory...');

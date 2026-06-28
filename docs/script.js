@@ -82,7 +82,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const fileMap = {
     'term-query': 'mcp-rpc-request.json',
     'term-contradict': 'mcp-rpc-response.json',
-    'term-audit': 'verify-attestation.log',
+    'term-audit': 'compliance-export.md',
     'term-remember': 'remember-bypass.log'
   };
 

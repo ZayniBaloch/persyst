@@ -121,8 +121,10 @@ export async function addMemoryInternal({ content, importance = 1.0, agent_id, s
       return { error: validation.error };
     }
 
-    // Derive namespace from agent_id and shared flag
-    const namespace = (shared || !normalizedAgentId) ? 'shared' : normalizedAgentId;
+    // Derive namespace from agent_id, project env, and shared flag
+    const project = process.env.PERSYST_PROJECT;
+    const defaultNs = project || 'shared';
+    const namespace = (shared && !project) ? 'shared' : (normalizedAgentId || defaultNs);
 
     // Deduplication check (namespace-aware)
     const existing = getMemoryByContent(redactedContent, namespace);
@@ -196,7 +198,11 @@ export async function addMemoryInternal({ content, importance = 1.0, agent_id, s
 
             const isSelfUpdate = oldProv && oldProv.source_type === 'agent' && oldProv.source_id === normalizedAgentId;
 
-            if (isSelfUpdate || trustNew > trustOld) {
+            if (isSelfUpdate) {
+              continue; // Same agent: treat as complementary, not contradictory
+            }
+
+            if (trustNew > trustOld) {
               // New is preferred
               logContradiction(hitId, id, `Auto-detected contradiction: new memory is more trustworthy (similarity: ${sim.toFixed(3)}, content_diff: ${jaccard.toFixed(3)})`);
               contradictions.push({
@@ -305,8 +311,8 @@ export function registerTools(server) {
     },
     async ({ query, limit, agent_id, session_id }) => {
       try {
-        // Derive namespace from agent_id (null = search all)
-        const namespace = agent_id || null;
+        // Derive namespace from agent_id or PERSYST_PROJECT env
+        const namespace = agent_id || process.env.PERSYST_PROJECT || null;
         const results = await searchHybrid(query, limit, agent_id, session_id, namespace);
         return text({
           results,
@@ -446,7 +452,7 @@ export function registerTools(server) {
     },
     async ({ limit, agent_id }) => {
       try {
-        const namespace = agent_id || null;
+        const namespace = agent_id || process.env.PERSYST_PROJECT || null;
         const memories = getRecentMemories(limit, namespace);
         return text({ memories, count: memories.length, namespace: namespace || 'all' });
       } catch (err) {
@@ -465,7 +471,7 @@ export function registerTools(server) {
     },
     async ({ limit, agent_id }) => {
       try {
-        const namespace = agent_id || null;
+        const namespace = agent_id || process.env.PERSYST_PROJECT || null;
         const memories = getImportantMemories(limit, namespace);
         return text({ memories, count: memories.length, namespace: namespace || 'all' });
       } catch (err) {
@@ -501,7 +507,7 @@ export function registerTools(server) {
             source_type: 'git',
             source_id: commit.hash,
             confidence: 0.8
-          });
+          }, process.env.PERSYST_PROJECT || 'shared');
 
           const embedding = await generateEmbedding(commit.fullText);
           insertVector(id, embedding);
@@ -811,7 +817,7 @@ export function registerTools(server) {
     },
     async ({ query, max_tokens, agent_id, session_id, intent }) => {
       try {
-        const namespace = agent_id || null;
+        const namespace = agent_id || process.env.PERSYST_PROJECT || null;
         const contextData = await getOptimizedContext(query, max_tokens, agent_id, session_id, namespace, intent);
         return text(contextData);
       } catch (err) {

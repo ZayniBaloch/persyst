@@ -14,18 +14,20 @@ import {
   upsertWatchPosition,
   insertMemory,
   insertVector,
-  memoryExists
+  memoryExists,
+  deleteMemory
 } from './database.js';
 import { generateEmbedding } from './embeddings.js';
 import { extractHeuristic, hasExtractableSignals } from './extractor-heuristic.js';
 import { searchHybrid } from './search.js';
 import { searchCache } from './cache.js';
 import { memoryEventBus } from './events.js';
+import chokidar from 'chokidar';
 
 // Config path: ~/.persyst/config.json (overridable for tests)
 const CONFIG_FILE = process.env.PERSYST_CONFIG_FILE || join(homedir(), '.persyst', 'config.json');
 
-let intervalId = null;
+let chokidarWatcher = null;
 const DEDUP_THRESHOLD = 0.80;
 
 /**
@@ -148,18 +150,27 @@ async function processJsonlFile(filePath) {
             continue;
           }
 
-          // Insert memory with provenance (written to 'shared' by default)
+          // Insert memory with provenance (written to project namespace or 'shared')
+          const watcherNs = process.env.PERSYST_PROJECT || 'shared';
           const id = insertMemory(fact.content, fact.confidence, {
             source_type: 'agent',
             source_id: record.source === 'MODEL' ? 'antigravity-worker' : 'user-dialogue',
             confidence: fact.confidence
-          });
+          }, watcherNs);
 
-          const embedding = await generateEmbedding(fact.content);
-          insertVector(id, embedding);
+          try {
+            const embedding = await generateEmbedding(fact.content);
+            insertVector(id, embedding);
+          } catch (embedErr) {
+            console.error(`[persyst-watcher] Embedding failed for fact #${id}: ${embedErr.message}`);
+            // Clean up: delete the memory so we don't have orphaned entries
+            try { deleteMemory(id); } catch (_) {}
+            continue;
+          }
+
           addedCount++;
           console.error(`[persyst-watcher] Auto-extracted fact: "${fact.content}" (Memory #${id})`);
-          memoryEventBus.emit('memory_added', { id, content: fact.content, namespace: 'shared', source: 'watcher-antigravity' });
+          memoryEventBus.emit('memory_added', { id, content: fact.content, namespace: watcherNs, source: 'watcher-antigravity' });
         }
       }
     }
@@ -208,27 +219,32 @@ async function processJsonFile(filePath) {
       if (msg.role === 'user' || msg.role === 'assistant') {
         const facts = extractHeuristic(msg.content);
         for (const fact of facts) {
-          // Verify against exact duplicate (Bug A fix: check namespace 'shared')
-          if (memoryExists(fact.content, 'shared')) continue;
+          const watcherNs = process.env.PERSYST_PROJECT || 'shared';
+          if (memoryExists(fact.content, watcherNs)) continue;
 
-          // Verify against semantic similarity (Bug B fix: check namespace 'shared')
-          const similar = await searchHybrid(fact.content, 1, null, null, 'shared');
+          const similar = await searchHybrid(fact.content, 1, null, null, watcherNs);
           if (similar.length > 0 && parseFloat(similar[0].similarity) >= DEDUP_THRESHOLD) {
             continue;
           }
 
-          // Insert memory with provenance (written to 'shared' by default)
           const id = insertMemory(fact.content, fact.confidence, {
             source_type: 'agent',
             source_id: msg.role === 'assistant' ? 'roo-worker' : 'user-dialogue',
             confidence: fact.confidence
-          });
+          }, watcherNs);
 
-          const embedding = await generateEmbedding(fact.content);
-          insertVector(id, embedding);
+          try {
+            const embedding = await generateEmbedding(fact.content);
+            insertVector(id, embedding);
+          } catch (embedErr) {
+            console.error(`[persyst-watcher] Embedding failed for fact #${id}: ${embedErr.message}`);
+            try { deleteMemory(id); } catch (_) {}
+            continue;
+          }
+
           addedCount++;
           console.error(`[persyst-watcher] Auto-extracted fact: "${fact.content}" (Memory #${id})`);
-          memoryEventBus.emit('memory_added', { id, content: fact.content, namespace: 'shared', source: 'watcher-roo' });
+          memoryEventBus.emit('memory_added', { id, content: fact.content, namespace: watcherNs, source: 'watcher-roo' });
         }
       }
     }
@@ -323,21 +339,37 @@ export async function scanDirectories() {
   }
 }
 
-const SCAN_INTERVAL_MS = 5000;
-
 /**
- * Schedule the next scan. Uses recursive setTimeout to prevent
- * overlapping scans when a scan takes longer than the interval.
+ * Handle a file addition or modification event from Chokidar.
+ * @param {string} filePath 
  */
-async function scheduleNextScan() {
-  try {
-    await scanDirectories();
-  } catch (err) {
-    console.error(`[persyst-watcher] Folder scan failed: ${err.message}`);
+async function handleFileChange(filePath) {
+  const normalizedPath = filePath.replace(/\\/g, '/');
+  let addedCount = 0;
+  
+  if (normalizedPath.endsWith('transcript.jsonl')) {
+    addedCount = await processJsonlFile(filePath);
+  } else if (normalizedPath.endsWith('.json') && normalizedPath.includes('tasks')) {
+    addedCount = await processJsonFile(filePath);
   }
-  // Only schedule the next scan after the current one fully completes
-  if (intervalId) {
-    intervalId = setTimeout(scheduleNextScan, SCAN_INTERVAL_MS);
+
+  if (addedCount > 0) {
+    try {
+      console.error(`[persyst-watcher] Running automatic memory consolidation sweep...`);
+      const { consolidateMemories } = await import('./search.js');
+      const report = await consolidateMemories();
+      console.error(`[persyst-watcher] Auto-consolidation complete: merged ${report.consolidated_groups} duplicate groups.`);
+    } catch (e) {
+      console.error(`[persyst-watcher] Auto-consolidation failed: ${e.message}`);
+    }
+  }
+
+  // Run periodic auto-expiry check on every change (fast query)
+  try {
+    const { archiveExpiredMemories } = await import('./database.js');
+    archiveExpiredMemories();
+  } catch (e) {
+    console.error(`[persyst-watcher] Auto-expiry execution failed: ${e.message}`);
   }
 }
 
@@ -345,20 +377,42 @@ async function scheduleNextScan() {
  * Start the background log watcher daemon.
  */
 export function startWatcher() {
-  if (intervalId) return;
+  if (chokidarWatcher) return;
 
-  console.error('[persyst-watcher] Starting background log watcher daemon...');
-  loadWatchedDirs();
+  console.error('[persyst-watcher] Starting background log watcher daemon (Chokidar)...');
+  const watchDirs = loadWatchedDirs();
 
-  // Run initial scan, then schedule periodic scans
+  // Run initial scan, then start watching
   scanDirectories()
     .catch(err => {
       console.error(`[persyst-watcher] Initial scan failed: ${err.message}`);
     })
     .then(() => {
-      if (!intervalId) {
-        intervalId = setTimeout(scheduleNextScan, SCAN_INTERVAL_MS);
-      }
+      if (chokidarWatcher) return;
+      chokidarWatcher = chokidar.watch(watchDirs, {
+        persistent: true,
+        ignoreInitial: true, // we already ran scanDirectories
+        awaitWriteFinish: {
+          stabilityThreshold: 300,
+          pollInterval: 100
+        }
+      });
+
+      chokidarWatcher.on('add', filePath => {
+        handleFileChange(filePath).catch(err => {
+          console.error(`[persyst-watcher] Error handling added file ${filePath}:`, err);
+        });
+      });
+
+      chokidarWatcher.on('change', filePath => {
+        handleFileChange(filePath).catch(err => {
+          console.error(`[persyst-watcher] Error handling changed file ${filePath}:`, err);
+        });
+      });
+
+      chokidarWatcher.on('error', err => {
+        console.error(`[persyst-watcher] Chokidar watcher error: ${err.message}`);
+      });
     });
 }
 
@@ -366,9 +420,9 @@ export function startWatcher() {
  * Stop the background log watcher daemon.
  */
 export function stopWatcher() {
-  if (intervalId) {
-    clearTimeout(intervalId);
-    intervalId = null;
+  if (chokidarWatcher) {
+    chokidarWatcher.close().catch(() => {});
+    chokidarWatcher = null;
     console.error('[persyst-watcher] Background log watcher daemon stopped.');
   }
 }

@@ -172,8 +172,8 @@ async function run() {
 
   // Spawn gateway server for benchmarking
   const serverProcess = spawn('node', [serverPath], {
-    env: { ...process.env, PORT: TEST_PORT, NODE_ENV: 'test' },
-    stdio: 'pipe'
+    env: { ...process.env, PORT: String(TEST_PORT), NODE_ENV: 'test', PERSYST_DEBUG: '1' },
+    stdio: ['pipe', 'pipe', 'pipe']
   });
 
   let serverOutput = '';

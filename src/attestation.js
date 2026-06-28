@@ -69,7 +69,7 @@ export function createAttestation(query, memories, agentId = null, sessionId = n
     return {
       id: m.id,
       content_hash: contentHash,
-      score: parseFloat(scoreVal)
+      score: Math.round(parseFloat(scoreVal) * 10000)
     };
   });
 
@@ -135,6 +135,22 @@ export function verifyAttestationRecord(attestation) {
     };
 
     const dataToSign = JSON.stringify(doc);
+    const fullRecord = {
+      ...doc,
+      signature: attestation.signature
+    };
+    const computedHash = crypto.createHash('sha256').update(JSON.stringify(fullRecord)).digest('hex');
+
+    // Check hash first — if it matches, doc reconstruction is correct
+    const hashMatch = computedHash === attestation.hash;
+    if (!hashMatch) {
+      console.error('[persyst-attest] HASH MISMATCH for', attestation.attestation_id);
+      console.error('[persyst-attest] stored hash:', attestation.hash);
+      console.error('[persyst-attest] computed hash:', computedHash);
+      console.error('[persyst-attest] doc:', JSON.stringify(doc));
+      return { valid: false, error: 'Attestation hash mismatch' };
+    }
+
     const publicKey = getPublicKey();
 
     // Verify signature
@@ -150,18 +166,12 @@ export function verifyAttestationRecord(attestation) {
     );
 
     if (!isSignatureValid) {
+      console.error('[persyst-attest] SIG VERIFY FAIL for', attestation.attestation_id);
+      console.error('[persyst-attest] Hash matches but signature invalid');
+      console.error('[persyst-attest] dataToSign:', dataToSign);
+      console.error('[persyst-attest] signature:', attestation.signature);
+      console.error('[persyst-attest] public key:', publicKey);
       return { valid: false, error: 'Signature verification failed' };
-    }
-
-    // Verify hash integrity
-    const fullRecord = {
-      ...doc,
-      signature: attestation.signature
-    };
-    const computedHash = crypto.createHash('sha256').update(JSON.stringify(fullRecord)).digest('hex');
-
-    if (computedHash !== attestation.hash) {
-      return { valid: false, error: 'Attestation hash mismatch' };
     }
 
     return { valid: true };

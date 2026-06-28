@@ -77,7 +77,7 @@ curl http://127.0.0.1:4321/health
 ```json
 {
   "ok": true,
-  "version": "2.2.5",
+  "version": "2.2.6",
   "uptime_seconds": 3600,
   "memories": 142,
   "sse_clients": 3

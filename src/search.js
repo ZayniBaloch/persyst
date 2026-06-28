@@ -136,8 +136,8 @@ export async function searchHybrid(queryText, limit = 5, agentId = null, session
         importance_score: memory.importance_score,
         created_at: memory.created_at,
         last_accessed: memory.last_accessed,
-        similarity: r.similarity.toFixed(4),
-        hybrid_score: finalScore.toFixed(4),
+        similarity: Math.round(r.similarity * 10000) / 10000,
+        hybrid_score: Math.round(finalScore * 10000) / 10000,
         keyword_match: r.keyword_match,
         reputation_warning: reputationWarning,
         provenance: prov

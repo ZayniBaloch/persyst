@@ -28,12 +28,14 @@ import {
   closeDatabase,
   getActiveMemoryCount,
   getNamespaceStats,
-  getAllAgentStats
+  getAllAgentStats,
+  getAttestationsByDateRange
 } from './database.js';
 import { consolidateMemories, searchHybrid, getOptimizedContext } from './search.js';
 import { startWatcher, stopWatcher } from './watcher.js';
 import { verifyChainIntegrity } from './attestation.js';
 import { memoryEventBus } from './events.js';
+import { logInfo } from './text-utils.js';
 
 // Track server birth time for uptime reporting
 const SERVER_START_TIME = Date.now();
@@ -145,7 +147,7 @@ async function handleGetRequest(req, res, url) {
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({
       ok: true,
-      version: '2.2.5',
+      version: '2.2.6',
       uptime_seconds: uptime,
       memories,
       sse_clients: sseClients.size
@@ -163,6 +165,115 @@ async function handleGetRequest(req, res, url) {
       const uptime = Math.floor((Date.now() - SERVER_START_TIME) / 1000);
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ uptime_seconds: uptime, namespaces, agents }));
+    } catch (err) {
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: err.message }));
+    }
+    return;
+  }
+
+  // ----------------------------------------------------------
+  // GET /compliance/export — cryptographic audit log export
+  //
+  // Query params:
+  //   start  — ISO timestamp or Unix epoch (default: beginning of time)
+  //   end    — ISO timestamp or Unix epoch (default: current time)
+  //   format — 'json' (default) | 'markdown'
+  // ----------------------------------------------------------
+  if (path === '/compliance/export') {
+    try {
+      const startParam = url.searchParams.get('start');
+      const endParam = url.searchParams.get('end');
+      const format = url.searchParams.get('format') || 'json';
+
+      // Parse start and end
+      let startDate = '0000-01-01T00:00:00.000Z';
+      let endDate = new Date().toISOString();
+
+      if (startParam) {
+        if (!isNaN(startParam)) {
+          startDate = new Date(parseInt(startParam, 10)).toISOString();
+        } else {
+          startDate = new Date(startParam).toISOString();
+        }
+      }
+      if (endParam) {
+        if (!isNaN(endParam)) {
+          endDate = new Date(parseInt(endParam, 10)).toISOString();
+        } else {
+          endDate = new Date(endParam).toISOString();
+        }
+      }
+
+      const attestations = getAttestationsByDateRange(startDate, endDate);
+      const agents = getAllAgentStats();
+      const summary = {
+        exported_at: new Date().toISOString(),
+        start_date: startDate,
+        end_date: endDate,
+        total_attestations: attestations.length,
+        system_integrity: 'SECURE'
+      };
+
+      if (format === 'markdown') {
+        let md = `# Persyst Cryptographic Compliance Export\n\n`;
+        md += `Exported at: \`${summary.exported_at}\`  \n`;
+        md += `Period: \`${summary.start_date}\` to \`${summary.end_date}\`  \n`;
+        md += `Total audit records: **${summary.total_attestations}**  \n`;
+        md += `System cryptographic status: **${summary.system_integrity}**  \n\n`;
+
+        md += `## Agent Trust Reputation Ledger\n\n`;
+        md += `| Agent ID | Created | Confirmed | Contradicted | Trust Score |\n`;
+        md += `|---|---|---|---|---|\n`;
+        for (const a of agents) {
+          md += `| \`${a.agent_id}\` | ${a.memories_created} | ${a.memories_confirmed} | ${a.memories_contradicted} | **${parseFloat(a.reputation_score).toFixed(2)}** |\n`;
+        }
+        md += `\n`;
+
+        md += `## Attestation Audit Trail\n\n`;
+        if (attestations.length === 0) {
+          md += `*No attestations found in the specified range.*\n`;
+        } else {
+          for (const att of attestations) {
+            md += `### Attestation \`${att.attestation_id}\`\n`;
+            md += `- **Timestamp:** \`${att.timestamp}\`\n`;
+            md += `- **Agent namespace:** \`${att.agent_id || 'shared'}\`\n`;
+            md += `- **Query:** *"${att.query}"*\n`;
+            md += `- **Previous Attestation Hash:** \`${att.previous_hash || 'GENESIS'}\`\n`;
+            md += `- **Current Signature Hash:** \`${att.hash}\`\n`;
+            md += `- **Signature:** \`${att.signature.substring(0, 32)}...\`\n`;
+
+            let retrieved = [];
+            try {
+              retrieved = JSON.parse(att.memories_retrieved);
+            } catch (_) {}
+
+            if (retrieved.length > 0) {
+              md += `- **Memories retrieved:**\n`;
+              for (const m of retrieved) {
+                md += `  - ID: \`${m.id}\`, Hash: \`${m.content_hash}\`, Score: \`${m.score}\`\n`;
+              }
+            } else {
+              md += `- **Memories retrieved:** None\n`;
+            }
+            md += `\n---\n`;
+          }
+        }
+        res.writeHead(200, { 'Content-Type': 'text/markdown; charset=utf-8' });
+        res.end(md);
+      } else {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+          summary,
+          agent_stats: agents,
+          attestations: attestations.map(att => ({
+            ...att,
+            memories_retrieved: (() => {
+              try { return JSON.parse(att.memories_retrieved); } catch (_) { return []; }
+            })()
+          }))
+        }, null, 2));
+      }
     } catch (err) {
       res.writeHead(500, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: err.message }));
@@ -238,7 +349,7 @@ async function handleGetRequest(req, res, url) {
     res.write(`event: connected\ndata: ${JSON.stringify({
       ok: true,
       timestamp: new Date().toISOString(),
-      server_version: '2.2.5'
+      server_version: '2.2.6'
     })}\n\n`);
 
     sseClients.add(res);
@@ -411,7 +522,14 @@ async function handlePostRequest(req, res, payload) {
       res.end(JSON.stringify({ error: 'Missing required field: name' }));
       return;
     }
-    const result = await executeToolInternal(name, args || {});
+    let result;
+    try {
+      result = await executeToolInternal(name, args || {});
+    } catch (err) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: err.message }));
+      return;
+    }
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify(result));
     return;
@@ -551,9 +669,6 @@ async function handlePostRequest(req, res, payload) {
 // MAIN SERVER STARTUP
 // ============================================================
 
-/**
- * Start the Persyst MCP server & HTTP Gateway.
- */
 export async function startServer() {
   // --- Create MCP server ---
   const server = new McpServer({
@@ -563,157 +678,29 @@ export async function startServer() {
 
   // --- Register all tools ---
   const registeredCount = registerTools(server);
-  console.error(`[persyst] ${registeredCount} tools registered ✓`);
+  logInfo(`[persyst] ${registeredCount} tools registered ✓`);
 
-  // --- Start background log watcher daemon (skip in test mode) ---
-  if (process.env.NODE_ENV !== 'test') {
-    startWatcher();
-  }
+  // --- Connect via stdio IMMEDIATELY so MCP handshake completes instantly (<10ms) ---
+  const transport = new StdioServerTransport();
+  await server.connect(transport);
 
-  // --- Gateway configuration ---
-  const httpPort = parseInt(process.env.PORT || '4321', 10);
-  const httpHost = process.env.PERSYST_HOST || '127.0.0.1';
-  const configuredApiKey = process.env.PERSYST_API_KEY || null;
+  logInfo('[persyst] MCP server running on stdio ✓');
+  logInfo('[persyst] Ready to receive tool calls');
 
-  if (configuredApiKey) {
-    console.error(`[persyst] API key auth enabled — endpoints require Authorization: Bearer <key>`);
-  }
-  if (httpHost !== '127.0.0.1') {
-    console.error(`[persyst] ⚠️  Gateway bound to ${httpHost} — ensure PERSYST_API_KEY is set for security`);
-  }
+  // Defer background services & HTTP server so stdio handshake is never blocked
+  let httpServer = null;
+  let decayTimer = null;
+  let consolidationTimer = null;
+  let sseHealthCheck = null;
 
-  // --- Start local HTTP Gateway ---
-  const httpServer = http.createServer((req, res) => {
-    // CORS headers
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'POST, GET, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-
-    if (req.method === 'OPTIONS') {
-      res.writeHead(204);
-      res.end();
-      return;
-    }
-
-    // API key authentication middleware
-    // /health is always public (for orchestrators / Docker health checks)
-    if (configuredApiKey) {
-      const urlPath = new URL(req.url || '/', 'http://127.0.0.1').pathname;
-      if (urlPath !== '/health') {
-        const authHeader = req.headers['authorization'] || '';
-        const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
-        if (token !== configuredApiKey) {
-          res.writeHead(401, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({
-            error: 'Unauthorized. Set header: Authorization: Bearer <PERSYST_API_KEY>'
-          }));
-          return;
-        }
-      }
-    }
-
-    // Route GET requests (no body reading needed)
-    if (req.method === 'GET') {
-      try {
-        const url = new URL(req.url || '/', `http://${httpHost}`);
-        handleGetRequest(req, res, url).catch(err => {
-          try {
-            res.writeHead(500, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ error: err.message }));
-          } catch (_) {}
-        });
-      } catch (err) {
-        res.writeHead(400, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: 'Bad request URL' }));
-      }
-      return;
-    }
-
-    // Route POST requests
-    if (req.method !== 'POST') {
-      res.writeHead(405, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: 'Method Not Allowed. Use POST or GET.' }));
-      return;
-    }
-
-    let body = '';
-    req.on('data', chunk => { body += chunk; });
-    req.on('end', async () => {
-      try {
-        // Handle both JSON and plain-text bodies (plain text used by /remember)
-        const contentType = req.headers['content-type'] || '';
-        let payload;
-        if (contentType.includes('text/plain')) {
-          payload = body.trim(); // Will be handled as string in /remember
-        } else {
-          payload = JSON.parse(body || '{}');
-        }
-        await handlePostRequest(req, res, payload);
-      } catch (err) {
-        try {
-          res.writeHead(500, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ error: err.message }));
-        } catch (_) {}
-      }
-    });
-  });
-
-  httpServer.on('error', (err) => {
-    if (err.code === 'EADDRINUSE') {
-      console.error(`[persyst] HTTP Gateway port ${httpPort} already in use. Stdio MCP server will continue.`);
-    } else {
-      console.error('[persyst] HTTP Gateway error:', err.message);
-    }
-  });
-
-  httpServer.listen(httpPort, httpHost, () => {
-    console.error(`[persyst] HTTP Gateway listening on http://${httpHost}:${httpPort} ✓`);
-    console.error(`[persyst] Endpoints: /health /stats /system-prompt /events /remember /search /add /context /tool /verify /batch/add /batch/search`);
-  });
-
-  // --- Start temporal decay timer (every hour) ---
-  const decayTimer = setInterval(applyTemporalDecay, 3600000);
-
-  // --- Start daily consolidation sweep ---
-  const consolidationTimer = setInterval(async () => {
-    console.error('[persyst] Running scheduled daily memory consolidation sweep...');
-    try {
-      const report = await consolidateMemories();
-      console.error(`[persyst] Consolidation sweep: consolidated ${report.consolidated_groups} duplicate groups.`);
-      if (report.consolidated_groups > 0) {
-        memoryEventBus.emit('memories_consolidated', {
-          consolidated_groups: report.consolidated_groups,
-          details: report.details
-        });
-      }
-    } catch (err) {
-      console.error('[persyst] Daily consolidation sweep failed:', err.message);
-    }
-  }, 86400000);
-
-  // --- SSE client health-check every 30 seconds (removes stale connections) ---
-  const sseHealthCheck = setInterval(() => {
-    for (const client of sseClients) {
-      try {
-        client.write(': health-check\n\n');
-      } catch (_) {
-        // Client is stale — remove it
-        try { client.end(); } catch (_) {}
-        sseClients.delete(client);
-      }
-    }
-  }, 30000);
-
-  // --- Graceful shutdown ---
   const shutdown = () => {
-    console.error('[persyst] Shutting down...');
-    clearInterval(decayTimer);
-    clearInterval(consolidationTimer);
-    clearInterval(sseHealthCheck);
+    logInfo('[persyst] Shutting down...');
+    if (decayTimer) clearInterval(decayTimer);
+    if (consolidationTimer) clearInterval(consolidationTimer);
+    if (sseHealthCheck) clearInterval(sseHealthCheck);
     stopWatcher();
     cleanupWatchers();
 
-    // Close all SSE connections gracefully
     for (const client of sseClients) {
       try {
         client.write(`event: server_shutdown\ndata: ${JSON.stringify({ message: 'Server shutting down' })}\n\n`);
@@ -722,18 +709,136 @@ export async function startServer() {
     }
     sseClients.clear();
 
-    httpServer.close();
+    if (httpServer) httpServer.close();
     closeDatabase();
-    // Let the process exit naturally after all handles are closed
-    // process.exit(0) removed — Node exits on its own when event loop is empty
   };
   process.on('SIGINT', shutdown);
   process.on('SIGTERM', shutdown);
 
-  // --- Connect via stdio ---
-  const transport = new StdioServerTransport();
-  await server.connect(transport);
+  setTimeout(() => {
+    // --- Start background log watcher daemon (skip in test mode) ---
+    if (process.env.NODE_ENV !== 'test') {
+      startWatcher();
+    }
 
-  console.error('[persyst] MCP server running on stdio ✓');
-  console.error('[persyst] Ready to receive tool calls');
+    // --- Gateway configuration ---
+    const httpPort = parseInt(process.env.PORT || '4321', 10);
+    const httpHost = process.env.PERSYST_HOST || '127.0.0.1';
+    const configuredApiKey = process.env.PERSYST_API_KEY || null;
+
+    if (configuredApiKey) {
+      logInfo(`[persyst] API key auth enabled — endpoints require Authorization: Bearer <key>`);
+    }
+    if (httpHost !== '127.0.0.1') {
+      logInfo(`[persyst] ⚠️  Gateway bound to ${httpHost} — ensure PERSYST_API_KEY is set for security`);
+    }
+
+    // --- Start local HTTP Gateway ---
+    httpServer = http.createServer((req, res) => {
+      // CORS headers
+      res.setHeader('Access-Control-Allow-Origin', '*');
+      res.setHeader('Access-Control-Allow-Methods', 'POST, GET, OPTIONS');
+      res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+
+      if (req.method === 'OPTIONS') {
+        res.writeHead(204);
+        res.end();
+        return;
+      }
+
+      if (configuredApiKey) {
+        const urlPath = new URL(req.url || '/', 'http://127.0.0.1').pathname;
+        if (urlPath !== '/health') {
+          const authHeader = req.headers['authorization'] || '';
+          const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
+          if (token !== configuredApiKey) {
+            res.writeHead(401, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({
+              error: 'Unauthorized. Set header: Authorization: Bearer <PERSYST_API_KEY>'
+            }));
+            return;
+          }
+        }
+      }
+
+      const url = new URL(req.url || '/', `http://${req.headers.host || '127.0.0.1'}`);
+      const path = url.pathname;
+
+      if (req.method === 'GET') {
+        handleGetRequest(req, res, path, url);
+        return;
+      }
+
+      if (req.method === 'POST') {
+        let body = '';
+        req.on('data', chunk => {
+          body += chunk;
+          if (body.length > 10 * 1024 * 1024) {
+            res.writeHead(413, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Payload too large. Max 10MB.' }));
+            req.destroy();
+          }
+        });
+        req.on('end', () => {
+          try {
+            const payload = body ? JSON.parse(body) : {};
+            handlePostRequest(req, res, payload).catch(err => {
+              try {
+                res.writeHead(500, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: err.message }));
+              } catch (_) {}
+            });
+          } catch (err) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: `Invalid JSON payload: ${err.message}` }));
+          }
+        });
+        return;
+      }
+
+      res.writeHead(405, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Method not allowed' }));
+    });
+
+    httpServer.on('error', (err) => {
+      if (err.code === 'EADDRINUSE') {
+        logInfo(`[persyst] HTTP Gateway port ${httpPort} already in use. Stdio MCP server will continue.`);
+      } else {
+        console.error('[persyst] HTTP Gateway error:', err.message);
+      }
+    });
+
+    httpServer.listen(httpPort, httpHost, () => {
+      logInfo(`[persyst] HTTP Gateway listening on http://${httpHost}:${httpPort} ✓`);
+    });
+
+    decayTimer = setInterval(applyTemporalDecay, 3600000);
+
+    consolidationTimer = setInterval(async () => {
+      logInfo('[persyst] Running scheduled daily memory consolidation sweep...');
+      try {
+        const report = await consolidateMemories();
+        logInfo(`[persyst] Consolidation sweep: consolidated ${report.consolidated_groups} duplicate groups.`);
+        if (report.consolidated_groups > 0) {
+          memoryEventBus.emit('memories_consolidated', {
+            consolidated_groups: report.consolidated_groups,
+            details: report.details
+          });
+        }
+      } catch (err) {
+        console.error('[persyst] Daily consolidation sweep failed:', err.message);
+      }
+    }, 86400000);
+
+    sseHealthCheck = setInterval(() => {
+      for (const client of sseClients) {
+        try {
+          client.write(': health-check\n\n');
+        } catch (_) {
+          try { client.end(); } catch (_) {}
+          sseClients.delete(client);
+        }
+      }
+    }, 30000);
+  }, 50);
 }

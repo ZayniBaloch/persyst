@@ -29,20 +29,20 @@
 
 [data-theme="dark"] {
   /* Premium Dark Mode */
-  --bg-color: #080b11;
-  --bg-secondary: #030406;
-  --surface-color: #0e1322;
-  --surface-hover: #171d30;
-  --text-primary: #f8fafc;
-  --text-secondary: #94a3b8;
-  --border-color: #1e293b;
-  --border-hover: #334155;
+  --bg-color: #0a0e17;
+  --bg-secondary: #05070c;
+  --surface-color: #111827;
+  --surface-hover: #1f2937;
+  --text-primary: #f9fafb;
+  --text-secondary: #9ca3af;
+  --border-color: #1f2937;
+  --border-hover: #374151;
   
-  --accent-indigo: #3b82f6;
-  --accent-indigo-glow: rgba(59, 130, 246, 0.15);
-  --accent-violet: #34d399;
-  --accent-pink: #fbbf24;
-  --accent-sunset: #f8fafc;
+  --accent-indigo: #4f46e5;
+  --accent-indigo-glow: rgba(79, 70, 229, 0.15);
+  --accent-violet: #10b981;
+  --accent-pink: #f59e0b;
+  --accent-sunset: #f9fafb;
   
   --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.5);
   --shadow-md: 0 10px 15px -3px rgba(0, 0, 0, 0.3);
@@ -410,7 +410,7 @@ body {
 
 /* Features Grid */
 .features-section {
-  padding: 5.5rem 0;
+  padding: 7.5rem 0;
   background: var(--bg-secondary);
   border-top: 1px solid var(--border-color);
   border-bottom: 1px solid var(--border-color);
@@ -513,7 +513,7 @@ body {
 
 /* Comparison Section */
 .why-persyst-section {
-  padding: 5.5rem 0;
+  padding: 7.5rem 0;
   background: var(--bg-color);
 }
 
@@ -564,7 +564,7 @@ body {
 
 /* Sandbox Section */
 .sandbox-section {
-  padding: 5.5rem 0;
+  padding: 7.5rem 0;
   background: var(--bg-color);
 }
 
@@ -693,7 +693,7 @@ body {
 
 /* Getting Started Setup Tabs */
 .getting-started-section {
-  padding: 5.5rem 0;
+  padding: 7.5rem 0;
   background: var(--bg-secondary);
   border-top: 1px solid var(--border-color);
   border-bottom: 1px solid var(--border-color);
@@ -835,7 +835,7 @@ body {
 
 /* SDK Section */
 .sdk-section {
-  padding: 5.5rem 0;
+  padding: 7.5rem 0;
   background: var(--bg-color);
   border-top: 1px solid var(--border-color);
 }
@@ -1010,4 +1010,73 @@ footer {
   .install-box { justify-content: space-between; }
   .btn-primary, .btn-outline { text-align: center; justify-content: center; }
   .footer-container { flex-direction: column; text-align: center; }
+}
+
+/* Collapsible details styling */
+details.full-specifications summary::-webkit-details-marker {
+  display: none;
+}
+details.full-specifications summary {
+  list-style: none;
+}
+details.full-specifications[open] summary i {
+  transform: rotate(180deg);
+}
+
+/* Mobile queries for architecture diagram flow */
+@media (max-width: 768px) {
+  .architecture-flow {
+    flex-direction: column !important;
+    gap: 1rem !important;
+  }
+  .architecture-flow .arch-arrow {
+    transform: rotate(90deg);
+    margin: 0.25rem 0;
+  }
+  .architecture-flow .arch-box {
+    width: 100%;
+    transform: none !important;
+  }
+}
+
+/* Compliance Badges - Green for Trust */
+.trust-badge {
+  background: rgba(40, 167, 69, 0.1) !important;
+  color: #28a745 !important;
+  border: 1px solid rgba(40, 167, 69, 0.3) !important;
+}
+
+/* Attestation Blocks - Gold/Orange for Cryptographic verification */
+.attestation-verified {
+  background: rgba(255, 193, 7, 0.05) !important;
+  border-left: 4px solid #ffc107 !important;
+  padding: 1rem;
+  border-radius: 4px;
+  color: #ffb300;
+}
+
+/* Red for Contradiction */
+.contradiction-badge {
+  background: rgba(220, 53, 69, 0.1) !important;
+  color: #dc3545 !important;
+  border: 1px solid rgba(220, 53, 69, 0.3) !important;
+}
+
+/* Verified Badge checkmark pulse animation */
+@keyframes pulse-check {
+  0% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(1.15); opacity: 0.8; }
+  100% { transform: scale(1); opacity: 1; }
+}
+
+.verified-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: #28a745;
+  font-weight: bold;
+}
+.verified-badge i {
+  animation: pulse-check 2s infinite;
+  color: #28a745;
 }

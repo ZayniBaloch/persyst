@@ -20,7 +20,7 @@ import db, {
 import { generateEmbedding } from './embeddings.js';
 import { createAttestation } from './attestation.js';
 import { searchCache, LRUCache } from './cache.js';
-import { jaccardSimilarity } from './text-utils.js';
+import { jaccardSimilarity, logInfo } from './text-utils.js';
 
 let lastDataVersion = 0;
 
@@ -57,7 +57,7 @@ export async function searchHybrid(queryText, limit = 5, agentId = null, session
   const cacheKey = LRUCache.key(`${ns}:${queryText}`, parsedLimit);
   const cached = searchCache.get(cacheKey);
   if (cached) {
-    console.error(`[persyst-cache] Cache HIT for query: "${queryText.slice(0, 50)}..."`);
+    logInfo(`[persyst-cache] Cache HIT for query: "${queryText.slice(0, 50)}..."`);
     return cached;
   }
 

@@ -22,6 +22,7 @@ import { extractHeuristic, hasExtractableSignals } from './extractor-heuristic.j
 import { searchHybrid } from './search.js';
 import { searchCache } from './cache.js';
 import { memoryEventBus } from './events.js';
+import { logInfo } from './text-utils.js';
 import chokidar from 'chokidar';
 
 // Config path: ~/.persyst/config.json (overridable for tests)
@@ -379,7 +380,7 @@ async function handleFileChange(filePath) {
 export function startWatcher() {
   if (chokidarWatcher) return;
 
-  console.error('[persyst-watcher] Starting background log watcher daemon (Chokidar)...');
+  logInfo('[persyst-watcher] Starting background log watcher daemon (Chokidar)...');
   const watchDirs = loadWatchedDirs();
 
   // Run initial scan, then start watching
@@ -423,6 +424,6 @@ export function stopWatcher() {
   if (chokidarWatcher) {
     chokidarWatcher.close().catch(() => {});
     chokidarWatcher = null;
-    console.error('[persyst-watcher] Background log watcher daemon stopped.');
+    logInfo('[persyst-watcher] Background log watcher daemon stopped.');
   }
 }

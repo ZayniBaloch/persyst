@@ -687,6 +687,14 @@ export async function startServer() {
   logInfo('[persyst] MCP server running on stdio ✓');
   logInfo('[persyst] Ready to receive tool calls');
 
+  // Interactive Terminal Banner (only shown when run directly by a user in terminal)
+  if (process.stderr.isTTY || process.stdout.isTTY) {
+    console.error(`\n[OK] Persyst MCP Server is active and listening (stdio mode)`);
+    console.error(`[OK] Workspace Project: ${process.env.PERSYST_PROJECT || 'shared'}`);
+    console.error(`[OK] Local HTTP Gateway: http://127.0.0.1:${process.env.PORT || '4321'}`);
+    console.error(`[OK] Process ID: ${process.pid} | Press Ctrl+C to stop.\n`);
+  }
+
   // Defer background services & HTTP server so stdio handshake is never blocked
   let httpServer = null;
   let decayTimer = null;

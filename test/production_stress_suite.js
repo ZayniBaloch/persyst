@@ -23,7 +23,7 @@ import { generateEmbedding } from '../src/embeddings.js';
 
 async function runProductionStressSuite() {
   console.log('\n============================================================');
-  console.log('🔥 PERSYST REAL-WORLD PRODUCTION STRESS TEST SUITE');
+  console.log('PERSYST REAL-WORLD PRODUCTION STRESS TEST SUITE');
   console.log('============================================================\n');
 
   // Clear test database state
@@ -32,7 +32,7 @@ async function runProductionStressSuite() {
   // ------------------------------------------------------------
   // 1. NEEDLE IN A HAYSTACK (NIAH) RETRIEVAL STRESS TEST
   // ------------------------------------------------------------
-  console.log('📌 Test 1: Needle In A Haystack (NIAH) Noise Resilience...');
+  console.log('[TEST 1] Needle In A Haystack (NIAH) Noise Resilience...');
   const startNiah = performance.now();
   const NOISE_COUNT = 200; // Generate 200 distracting facts
 
@@ -60,13 +60,13 @@ async function runProductionStressSuite() {
 
   const needleFound = niahResults.some(r => r.content.includes('5439'));
   console.log(`   - Retrieval Time: ${niahTime.toFixed(2)} ms`);
-  console.log(`   - Needle Found in Top Results: ${needleFound ? '✅ YES (100% Precision)' : '❌ NO'}`);
+  console.log(`   - Needle Found in Top Results: ${needleFound ? '[PASS] (100% Precision)' : '[FAIL]'}`);
   console.log(`   - Total Haystack Index Time: ${((performance.now() - startNiah) / 1000).toFixed(2)}s\n`);
 
   // ------------------------------------------------------------
   // 2. CONTRADICTION RESOLUTION & MEMORY OVERWRITE TEST
   // ------------------------------------------------------------
-  console.log('🔄 Test 2: Multi-Turn Contradiction & Memory Overwrite Chain...');
+  console.log('[TEST 2] Multi-Turn Contradiction & Memory Overwrite Chain...');
   
   const v1 = insertMemory('Architecture Decision: Use React 17 for frontend components.', 0.8, { source_type: 'agent', source_id: 'dev-1' }, 'proj-alpha');
   insertVector(v1, await generateEmbedding('Architecture Decision: Use React 17 for frontend components.'));
@@ -83,12 +83,12 @@ async function runProductionStressSuite() {
   const correctlySuperceded = topMatch && topMatch.content.includes('React 18');
 
   console.log(`   - Latest Truth Surface: "${topMatch ? topMatch.content : 'None'}"`);
-  console.log(`   - Contradiction Handled Correctly: ${correctlySuperceded ? '✅ YES (Active state preserved)' : '❌ NO'}\n`);
+  console.log(`   - Contradiction Handled Correctly: ${correctlySuperceded ? '[PASS] (Active state preserved)' : '[FAIL]'}\n`);
 
   // ------------------------------------------------------------
   // 3. MULTI-AGENT SWARM CONCURRENCY BURST (20 WORKERS)
   // ------------------------------------------------------------
-  console.log('⚡ Test 3: Multi-Agent Swarm Concurrency Load Test (20 Parallel Workers)...');
+  console.log('[TEST 3] Multi-Agent Swarm Concurrency Load Test (20 Parallel Workers)...');
   const WORKERS = 20;
   const CONCURRENT_OPS_PER_WORKER = 10;
   const startSwarm = performance.now();
@@ -119,12 +119,12 @@ async function runProductionStressSuite() {
   console.log(`   - Executed Operations: ${totalOps} / ${WORKERS * CONCURRENT_OPS_PER_WORKER}`);
   console.log(`   - Total Swarm Time: ${totalSwarmTime.toFixed(2)} ms`);
   console.log(`   - Concurrent Throughput: ${opsPerSec} ops/sec`);
-  console.log(`   - Lock Contention Errors: ✅ 0 (SQLite WAL Mode Rock Solid)\n`);
+  console.log(`   - Lock Contention Errors: [OK] 0 (SQLite WAL Mode Rock Solid)\n`);
 
   // ------------------------------------------------------------
   // 4. TOKEN COMPRESSION RATIO & CONTEXT OPTIMIZATION
   // ------------------------------------------------------------
-  console.log('📦 Test 4: Token Compression Ratio (50k Raw Tokens down to Token Budget)...');
+  console.log('[TEST 4] Token Compression Ratio (50k Raw Tokens down to Token Budget)...');
   const startCompress = performance.now();
 
   const contextData = await getOptimizedContext('authentication token payload security rules', 1500, 'worker-1', 'sess-1', 'shared', 'security');
@@ -136,10 +136,10 @@ async function runProductionStressSuite() {
   console.log(`   - Graph Compile Time: ${compressTime.toFixed(2)} ms`);
   console.log(`   - Raw Context Estimate: ~${Math.round(rawCharCount / 4)} tokens`);
   console.log(`   - Compressed Output Budget: ~${Math.round(compressedCharCount / 4)} tokens`);
-  console.log(`   - Context Compression Efficiency: ✅ ${compressionRatio}% token reduction\n`);
+  console.log(`   - Context Compression Efficiency: [OK] ${compressionRatio}% token reduction\n`);
 
   console.log('============================================================');
-  console.log('🎉 PRODUCTION STRESS TEST SUITE COMPLETE — ALL 4 BENCHMARKS PASSED');
+  console.log('[RESULT] PRODUCTION STRESS TEST SUITE COMPLETE — ALL 4 BENCHMARKS PASSED');
   console.log('============================================================\n');
 
   closeDatabase();

@@ -100,16 +100,16 @@ try {
     });
   });
 
-  console.log(`✅ Exported ${count} memories to: ${outputFile}`);
+  console.log(`[OK] Exported ${count} memories to: ${outputFile}`);
   if (namespace) {
-    console.log(`   Namespace filter: "${namespace}" + shared`);
+    console.log(`     Namespace filter: "${namespace}" + shared`);
   }
   if (includeArchived) {
-    console.log('   Includes archived (superseded) memories.');
+    console.log('     Includes archived (superseded) memories.');
   }
 
 } catch (err) {
-  console.error(`❌ Export failed: ${err.message}`);
+  console.error(`[ERROR] Export failed: ${err.message}`);
   process.exit(1);
 } finally {
   closeDatabase();

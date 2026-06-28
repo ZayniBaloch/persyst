@@ -48,21 +48,21 @@ let failed = 0;
 
 function assert(condition, label) {
   if (condition) {
-    console.log(`  ✅ ${label}`);
+    console.log(`  [PASS] ${label}`);
     passed++;
   } else {
-    console.log(`  ❌ ${label}`);
+    console.log(`  [FAIL] ${label}`);
     failed++;
   }
 }
 
 async function runTests() {
-  console.log('\n🧪 Persyst Smoke Test\n');
+  console.log('\n[TEST] Persyst Smoke Test\n');
 
   // ----------------------------------------------------------
   // Test 1: Insert memories
   // ----------------------------------------------------------
-  console.log('📝 Test 1: Insert 10 memories with embeddings');
+  console.log('[TEST 1] Insert 10 memories with embeddings');
   const ids = [];
   for (const content of SAMPLE_MEMORIES) {
     const id = insertMemory(content);
@@ -75,7 +75,7 @@ async function runTests() {
   // ----------------------------------------------------------
   // Test 2: Get memory by ID
   // ----------------------------------------------------------
-  console.log('\n🔍 Test 2: Get memory by ID');
+  console.log('\n[TEST 2] Get memory by ID');
   const memory = getMemory(ids[0]);
   assert(memory !== null, 'Memory retrieved successfully');
   assert(memory.content === SAMPLE_MEMORIES[0], 'Content matches');
@@ -83,7 +83,7 @@ async function runTests() {
   // ----------------------------------------------------------
   // Test 3: Semantic search — "night theme" should find "dark mode"
   // ----------------------------------------------------------
-  console.log('\n🧠 Test 3: Semantic search');
+  console.log('\n[TEST 3] Semantic search');
   const semanticResults = await searchHybrid('night theme', 3);
   const foundDarkMode = semanticResults.some(r =>
     r.content.includes('dark mode')
@@ -93,7 +93,7 @@ async function runTests() {
   // ----------------------------------------------------------
   // Test 4: Keyword search — "React" should find React memories
   // ----------------------------------------------------------
-  console.log('\n🔤 Test 4: Keyword search');
+  console.log('\n[TEST 4] Keyword search');
   const keywordResults = await searchHybrid('React', 5);
   const foundReact = keywordResults.some(r => r.content.includes('React'));
   assert(foundReact, '"React" → finds React memories (keyword match)');
@@ -101,21 +101,21 @@ async function runTests() {
   // ----------------------------------------------------------
   // Test 5: Recent memories
   // ----------------------------------------------------------
-  console.log('\n⏱️  Test 5: Get recent memories');
+  console.log('\n[TEST 5] Get recent memories');
   const recent = getRecentMemories(5);
   assert(recent.length === 5, `Got ${recent.length} recent memories`);
 
   // ----------------------------------------------------------
   // Test 6: Important memories
   // ----------------------------------------------------------
-  console.log('\n⭐ Test 6: Get important memories');
+  console.log('\n[TEST 6] Get important memories');
   const important = getImportantMemories(5);
   assert(important.length === 5, `Got ${important.length} important memories`);
 
   // ----------------------------------------------------------
   // Test 7: Delete memory
   // ----------------------------------------------------------
-  console.log('\n🗑️  Test 7: Delete memory');
+  console.log('\n[TEST 7] Delete memory');
   const deleted = deleteMemory(ids[0]);
   assert(deleted, 'Memory deleted successfully');
   const gone = getMemory(ids[0]);
@@ -132,7 +132,7 @@ async function runTests() {
   // Summary
   // ----------------------------------------------------------
   console.log(`\n${'═'.repeat(40)}`);
-  console.log(`📊 Results: ${passed} passed, ${failed} failed`);
+  console.log(`[RESULT] Smoke Test Summary: ${passed} passed, ${failed} failed`);
   console.log(`${'═'.repeat(40)}\n`);
 
   process.exit(failed > 0 ? 1 : 0);
@@ -140,6 +140,6 @@ async function runTests() {
 
 // Run it
 runTests().catch(err => {
-  console.error('💥 Test crashed:', err);
+  console.error('[ERROR] Test crashed:', err);
   process.exit(1);
 });

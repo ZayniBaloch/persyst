@@ -40,7 +40,7 @@ const skipEmbeddings = args.includes('--skip-embeddings');
 const DEDUP_THRESHOLD = 0.85;
 
 if (!inputFile) {
-  console.error('❌ Usage: persyst-import <file.jsonl> [--dry-run] [--namespace=<ns>] [--skip-embeddings]');
+  console.error('[ERROR] Usage: persyst-import <file.jsonl> [--dry-run] [--namespace=<ns>] [--skip-embeddings]');
   process.exit(1);
 }
 
@@ -49,10 +49,10 @@ if (!inputFile) {
 // ============================================================
 
 async function main() {
-  console.log(`📥 Persyst Import${isDryRun ? ' (DRY RUN — nothing will be written)' : ''}`);
-  console.log(`   Source: ${inputFile}`);
-  if (forceNamespace) console.log(`   Forcing namespace: "${forceNamespace}"`);
-  if (skipEmbeddings) console.log('   Skipping embedding regeneration.');
+  console.log(`[IMPORT] Persyst Import${isDryRun ? ' (DRY RUN — nothing will be written)' : ''}`);
+  console.log(`         Source: ${inputFile}`);
+  if (forceNamespace) console.log(`         Forcing namespace: "${forceNamespace}"`);
+  if (skipEmbeddings) console.log('         Skipping embedding regeneration.');
   console.log('');
 
   const rl = createInterface({
@@ -74,7 +74,7 @@ async function main() {
     try {
       record = JSON.parse(trimmed);
     } catch (err) {
-      console.error(`  ⚠️  Line ${lineNum}: Invalid JSON — skipping`);
+      console.error(`  [WARN] Line ${lineNum}: Invalid JSON — skipping`);
       errors++;
       continue;
     }
@@ -82,7 +82,7 @@ async function main() {
     const { content, importance_score = 1.0, namespace, provenance, valid_until } = record;
 
     if (!content || typeof content !== 'string' || content.trim().length === 0) {
-      console.error(`  ⚠️  Line ${lineNum}: Empty content — skipping`);
+      console.error(`  [WARN] Line ${lineNum}: Empty content — skipping`);
       errors++;
       continue;
     }
@@ -97,7 +97,7 @@ async function main() {
 
     // --- Dedup: exact content match ---
     if (memoryExists(content, targetNamespace)) {
-      console.log(`  ⏭️  Line ${lineNum}: Already exists — skipping "${content.slice(0, 60)}..."`);
+      console.log(`  [SKIP] Line ${lineNum}: Already exists — skipping "${content.slice(0, 60)}..."`);
       skipped++;
       continue;
     }
@@ -107,7 +107,7 @@ async function main() {
       try {
         const similar = await searchHybrid(content, 1, null, null, targetNamespace);
         if (similar.length > 0 && parseFloat(similar[0].similarity) >= DEDUP_THRESHOLD) {
-          console.log(`  ⏭️  Line ${lineNum}: Semantically similar to #${similar[0].id} (sim=${similar[0].similarity}) — skipping`);
+          console.log(`  [SKIP] Line ${lineNum}: Semantically similar to #${similar[0].id} (sim=${similar[0].similarity}) — skipping`);
           skipped++;
           continue;
         }
@@ -117,7 +117,7 @@ async function main() {
     }
 
     if (isDryRun) {
-      console.log(`  ✅ Would import: "${content.slice(0, 80)}${content.length > 80 ? '...' : ''}" → ns="${targetNamespace}"`);
+      console.log(`  [OK] Would import: "${content.slice(0, 80)}${content.length > 80 ? '...' : ''}" → ns="${targetNamespace}"`);
       imported++;
       continue;
     }
@@ -132,10 +132,10 @@ async function main() {
         insertVector(id, embedding);
       }
 
-      console.log(`  ✅ Imported #${id}: "${content.slice(0, 70)}${content.length > 70 ? '...' : ''}"`);
+      console.log(`  [OK] Imported #${id}: "${content.slice(0, 70)}${content.length > 70 ? '...' : ''}"`);
       imported++;
     } catch (err) {
-      console.error(`  ❌ Line ${lineNum}: Failed to insert — ${err.message}`);
+      console.error(`  [ERROR] Line ${lineNum}: Failed to insert — ${err.message}`);
       errors++;
     }
   }
@@ -143,16 +143,16 @@ async function main() {
   console.log('');
   console.log('═'.repeat(50));
   if (isDryRun) {
-    console.log(`📊 Dry run complete: ${imported} would import, ${skipped} skipped, ${errors} errors`);
+    console.log(`[INFO] Dry run complete: ${imported} would import, ${skipped} skipped, ${errors} errors`);
   } else {
-    console.log(`📊 Import complete: ${imported} imported, ${skipped} skipped, ${errors} errors`);
+    console.log(`[INFO] Import complete: ${imported} imported, ${skipped} skipped, ${errors} errors`);
   }
   console.log('═'.repeat(50));
 }
 
 main()
   .catch(err => {
-    console.error(`❌ Import crashed: ${err.message}`);
+    console.error(`[ERROR] Import crashed: ${err.message}`);
     process.exit(1);
   })
   .finally(() => {

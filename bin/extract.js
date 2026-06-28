@@ -114,9 +114,9 @@ async function run() {
   }
 
   if (!jsonOutput) {
-    console.log(`\n📋 Heuristic fact(s) extracted: ${heuristicFacts.length}`);
+    console.log(`\n[INFO] Heuristic fact(s) extracted: ${heuristicFacts.length}`);
     for (const f of heuristicFacts) {
-      console.log(`  ✓ [${f.category}] (conf: ${f.confidence}) ${f.content}`);
+      console.log(`  [OK] [${f.category}] (conf: ${f.confidence}) ${f.content}`);
     }
   }
 
@@ -128,7 +128,7 @@ async function run() {
   // --- Store to database (unless dry-run) ---
   if (!dryRun && allFacts.length > 0) {
     if (!jsonOutput) {
-      console.log(`\n💾 Storing to database...`);
+      console.log(`\n[INFO] Storing to database...`);
     }
 
     const { insertMemory, insertVector, memoryExists } = await import('../src/database.js');
@@ -142,7 +142,7 @@ async function run() {
       if (memoryExists(fact.content)) {
         dupes++;
         if (!jsonOutput) {
-          console.log(`  ⏭ Duplicate: "${fact.content.slice(0, 50)}..."`);
+          console.log(`  [SKIP] Duplicate: "${fact.content.slice(0, 50)}..."`);
         }
         continue;
       }
@@ -158,15 +158,15 @@ async function run() {
 
       stored++;
       if (!jsonOutput) {
-        console.log(`  ✅ Stored memory #${id}: "${fact.content.slice(0, 60)}..."`);
+        console.log(`  [OK] Stored memory #${id}: "${fact.content.slice(0, 60)}..."`);
       }
     }
 
     if (!jsonOutput) {
-      console.log(`\n📊 Result: ${stored} stored, ${dupes} duplicates skipped`);
+      console.log(`\n[INFO] Result: ${stored} stored, ${dupes} duplicates skipped`);
     }
   } else if (dryRun && !jsonOutput) {
-    console.log(`\n🔍 Dry run — no facts stored.`);
+    console.log(`\n[INFO] Dry run — no facts stored.`);
   }
 
   // --- JSON output ---
@@ -180,6 +180,6 @@ async function run() {
 }
 
 run().catch(err => {
-  console.error(`\n❌ Extraction failed: ${err.message}`);
+  console.error(`\n[ERROR] Extraction failed: ${err.message}`);
   process.exit(1);
 });

@@ -422,6 +422,30 @@ const stmts = {
     'SELECT namespace, COUNT(*) as count FROM memories WHERE valid_until IS NULL GROUP BY namespace ORDER BY count DESC'
   ),
 
+  // -- Content size stats (exact character & token counts) --
+  getContentStats: db.prepare(`
+    SELECT
+      COUNT(*)                      AS memory_count,
+      COALESCE(SUM(LENGTH(content)), 0)  AS total_chars,
+      COALESCE(AVG(LENGTH(content)), 0)  AS avg_chars,
+      COALESCE(MAX(LENGTH(content)), 0)  AS max_chars,
+      COALESCE(MIN(LENGTH(content)), 0)  AS min_chars
+    FROM memories
+    WHERE valid_until IS NULL
+  `),
+
+  // -- Namespace-level content stats --
+  getNamespaceContentStats: db.prepare(`
+    SELECT
+      namespace,
+      COUNT(*)                      AS count,
+      COALESCE(SUM(LENGTH(content)), 0) AS total_chars
+    FROM memories
+    WHERE valid_until IS NULL
+    GROUP BY namespace
+    ORDER BY total_chars DESC
+  `),
+
   // -- Memory History Chain (Feature 6: prepared statements) --
   getContradictionAncestors: db.prepare(
     'SELECT old_memory_id FROM contradictions WHERE new_memory_id = ?'
@@ -935,6 +959,41 @@ export function getActiveMemoryCount(namespace = null) {
 export function getNamespaceStats() {
   return stmts.getNamespaceStats.all();
 }
+
+/**
+ * Get exact content size metrics across all active memories.
+ * Returns real character counts — divide by 4 for a precise token estimate
+ * (standard GPT/Claude tokenizer approximation: ~4 chars per token).
+ * @returns {{ memory_count, total_chars, avg_chars, max_chars, min_chars }}
+ */
+export function getContentStats() {
+  const row = stmts.getContentStats.get();
+  const totalChars = Number(row.total_chars);
+  const avgChars   = Number(row.avg_chars);
+  return {
+    memory_count:     Number(row.memory_count),
+    total_chars:      totalChars,
+    avg_chars:        Math.round(avgChars),
+    max_chars:        Number(row.max_chars),
+    min_chars:        Number(row.min_chars),
+    // Exact token estimate (chars / 4 — standard tokenizer approximation)
+    raw_tokens_exact: Math.ceil(totalChars / 4),
+  };
+}
+
+/**
+ * Get per-namespace content size stats with exact character counts.
+ * @returns {Array<{namespace, count, total_chars, raw_tokens_exact}>}
+ */
+export function getNamespaceContentStats() {
+  return stmts.getNamespaceContentStats.all().map(row => ({
+    namespace:        row.namespace,
+    count:            Number(row.count),
+    total_chars:      Number(row.total_chars),
+    raw_tokens_exact: Math.ceil(Number(row.total_chars) / 4),
+  }));
+}
+
 
 // ============================================================
 // DEDUPLICATION BY EXACT CONTENT

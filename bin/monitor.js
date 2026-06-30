@@ -83,10 +83,6 @@ function truncate(str, maxLen = 80) {
   return clean.length > maxLen ? clean.slice(0, maxLen - 3) + '...' : clean;
 }
 
-function estimateRawTokens(memories) {
-  return memories * 150; // avg ~150 tokens per memory
-}
-
 function formatUptime(seconds) {
   const h = Math.floor(seconds / 3600);
   const m = Math.floor((seconds % 3600) / 60);
@@ -161,8 +157,11 @@ function printStatsPanel(health, stats) {
   const sseConns = health?.sse_clients ?? 0;
   const elapsed  = Math.floor((Date.now() - session.startTime) / 1000);
 
-  const rawTokens        = estimateRawTokens(memories);
-  const compressedTokens = Math.round(rawTokens * 0.055); // ~94.5% compression
+  // Use exact stats from /stats endpoint if available
+  const content    = stats?.content;
+  const totalChars = content?.total_chars ?? null;
+  const rawTokens  = content?.raw_tokens_exact ?? null;   // chars / 4 — exact, not estimated
+  const avgChars   = content?.avg_chars ?? null;
 
   const namespaces = stats?.namespaces || [];
   const agents     = stats?.agents     || [];
@@ -172,23 +171,38 @@ function printStatsPanel(health, stats) {
   console.log(`  ${bold(cyan('LIVE STATS'))}  ${dim('[' + timestamp() + ']')}`);
   console.log(hr('='));
 
-  // Context metrics
+  // Context metrics — exact where available
   console.log(`  ${bold('Active Memories:')}      ${bold(green(String(memories)))}`);
-  console.log(`  ${bold('Est. Raw Tokens:')}       ~${bold(rawTokens.toLocaleString())}  ${dim('(avg 150 tokens/memory)')}`);
-  console.log(`  ${bold('Compressed Budget:')}     ~${bold(compressedTokens.toLocaleString())}  ${dim('(94.5% reduction via graph-hop compression)')}`);
+
+  if (rawTokens !== null) {
+    console.log(`  ${bold('Total Content Size:')}   ${totalChars.toLocaleString()} chars`);
+    console.log(`  ${bold('Raw Tokens (exact):')}   ${bold(rawTokens.toLocaleString())}  ${dim('(SUM(LENGTH(content)) / 4)')}`);
+    if (avgChars !== null) {
+      console.log(`  ${bold('Avg Memory Length:')}    ${avgChars} chars  ${dim('(~' + Math.ceil(avgChars / 4) + ' tokens)')}`);
+    }
+  } else {
+    console.log(`  ${bold('Token Stats:')}          ${dim('(server not exposing content stats yet)')}`);
+  }
+
   console.log(`  ${bold('Server Uptime:')}         ${formatUptime(uptime)}`);
   console.log(`  ${bold('SSE Subscribers:')}       ${sseConns}`);
 
-  // Namespace breakdown
+  // Namespace breakdown — with exact chars
   if (namespaces.length > 0) {
     console.log('');
     console.log(`  ${bold('Namespace Breakdown:')}`);
-    const total = namespaces.reduce((sum, ns) => sum + ns.count, 0) || 1;
+    const totalNsChars = namespaces.reduce((sum, ns) => sum + (ns.total_chars || 0), 0) || 1;
     for (const ns of namespaces) {
-      const pct  = Math.round((ns.count / total) * 20);
-      const bar  = '#'.repeat(Math.max(1, pct));
-      const name = (ns.namespace || 'shared').padEnd(30);
-      console.log(`    ${cyan(name)}  ${green(bar.padEnd(20))}  ${bold(String(ns.count))} memories`);
+      const nsChars  = ns.total_chars ?? 0;
+      const nsToks   = ns.raw_tokens_exact ?? Math.ceil(nsChars / 4);
+      const nsCount  = ns.count ?? 0;
+      const pct      = Math.max(1, Math.round((nsChars / totalNsChars) * 20));
+      const bar      = '#'.repeat(pct);
+      const name     = (ns.namespace || 'shared').padEnd(30);
+      console.log(
+        `    ${cyan(name)}  ${green(bar.padEnd(20))}  ${bold(String(nsCount))} memories` +
+        `  |  ${nsToks.toLocaleString()} tokens`
+      );
     }
   }
 
@@ -226,6 +240,7 @@ function printStatsPanel(health, stats) {
   console.log(hr('='));
   console.log('');
 }
+
 
 // ============================================================
 // EVENT PRINTERS

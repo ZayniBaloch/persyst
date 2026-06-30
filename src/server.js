@@ -28,6 +28,8 @@ import {
   closeDatabase,
   getActiveMemoryCount,
   getNamespaceStats,
+  getContentStats,
+  getNamespaceContentStats,
   getAllAgentStats,
   getAttestationsByDateRange
 } from './database.js';
@@ -160,11 +162,12 @@ async function handleGetRequest(req, res, url) {
   // ----------------------------------------------------------
   if (path === '/stats') {
     try {
-      const namespaces = getNamespaceStats();
-      const agents = getAllAgentStats();
-      const uptime = Math.floor((Date.now() - SERVER_START_TIME) / 1000);
+      const namespaces  = getNamespaceContentStats(); // exact chars + tokens per namespace
+      const content     = getContentStats();           // exact global char/token totals
+      const agents      = getAllAgentStats();
+      const uptime      = Math.floor((Date.now() - SERVER_START_TIME) / 1000);
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ uptime_seconds: uptime, namespaces, agents }));
+      res.end(JSON.stringify({ uptime_seconds: uptime, namespaces, content, agents }));
     } catch (err) {
       res.writeHead(500, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: err.message }));

@@ -1,6 +1,6 @@
 {
   "name": "persyst-mcp",
-  "version": "2.2.7",
+  "version": "2.2.8",
   "description": "Local-first, compliance-grade MCP memory layer with hybrid keyword + semantic search for coding agents",
   "type": "module",
   "main": "index.js",
@@ -12,11 +12,11 @@
     }
   },
   "bin": {
-    "persyst-mcp": "./index.js",
-    "persyst-setup": "./bin/setup.js",
-    "persyst-init": "./bin/init.js",
-    "persyst-monitor": "./bin/monitor.js",
-    "persyst": "./index.js"
+    "persyst-mcp": "index.js",
+    "persyst-setup": "bin/setup.js",
+    "persyst-init": "bin/init.js",
+    "persyst-monitor": "bin/monitor.js",
+    "persyst": "index.js"
   },
   "engines": {
     "node": ">=18.0.0"

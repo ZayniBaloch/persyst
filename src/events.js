@@ -8,6 +8,8 @@
  * Events emitted:
  *   memory_added       { id, content, namespace, source }
  *   memory_deleted     { id }
+ *   memory_updated     { old_id, new_id, namespace }
+ *   memory_retrieved   { tool, query, count, agent_id, namespace, memory_ids, token_budget? }
  *   memories_consolidated { consolidated_groups, details }
  */
 

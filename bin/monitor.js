@@ -121,6 +121,7 @@ function get(path) {
 
 const session = {
   saved:        0,
+  retrieved:    0,
   deleted:      0,
   updated:      0,
   consolidated: 0,
@@ -215,6 +216,7 @@ function printStatsPanel(health, stats) {
   console.log(`  ${bold('Session Activity:')}   ${dim('(' + formatUptime(elapsed) + ' monitoring)')}`);
   console.log(
     `    ${green('[SAVED]')}    ${bold(String(session.saved).padEnd(6))}` +
+    `  ${cyan('[RETRIEVED]')} ${bold(String(session.retrieved).padEnd(6))}` +
     `  ${yellow('[UPDATED]')} ${bold(String(session.updated).padEnd(6))}` +
     `  ${red('[DELETED]')}  ${bold(String(session.deleted).padEnd(6))}` +
     `  ${magenta('[WATCHER]')} ${bold(String(session.watcher))}` +
@@ -257,6 +259,31 @@ function printMemoryDeleted(data) {
   console.log(`  ${bold(red('[MEMORY DELETED]   '))}  ${dim(timestamp())}`);
   console.log(`    ${bold('Memory ID:')}    #${data.id}`);
   console.log(`    ${bold('Namespace:')}    ${data.namespace || 'shared'}`);
+  console.log(hr('-', 60));
+}
+
+function printMemoryRetrieved(data) {
+  session.retrieved++;
+  const tool      = data.tool || 'unknown';
+  const agent     = data.agent_id || 'unknown';
+  const count     = data.count ?? 0;
+  const query     = data.query || '';
+  const ns        = data.namespace || 'shared';
+  const ids       = Array.isArray(data.memory_ids) ? data.memory_ids.join(', #') : '';
+  const hasBudget = data.token_budget !== undefined;
+
+  console.log(`  ${bold(cyan('[MEMORY RETRIEVED]  '))}  ${dim(timestamp())}`);
+  console.log(`    ${bold('Tool:')}         ${cyan(tool)}`);
+  console.log(`    ${bold('Agent:')}        ${agent}`);
+  console.log(`    ${bold('Query:')}        ${dim(truncate(query, 70))}`);
+  console.log(`    ${bold('Results:')}      ${bold(green(String(count)))} memories injected`);
+  if (ids) {
+    console.log(`    ${bold('Memory IDs:')}   #${ids}`);
+  }
+  console.log(`    ${bold('Namespace:')}    ${ns}`);
+  if (hasBudget) {
+    console.log(`    ${bold('Token Budget:')} ${data.token_budget.toLocaleString()}`);
+  }
   console.log(hr('-', 60));
 }
 
@@ -388,9 +415,10 @@ function startMonitor() {
 
       switch (eventName) {
         case 'connected':       break; // handled in onConnected
-        case 'memory_added':    printMemorySaved(data);    break;
-        case 'memory_deleted':  printMemoryDeleted(data);  break;
-        case 'memory_updated':  printMemoryUpdated(data);  break;
+        case 'memory_added':    printMemorySaved(data);      break;
+        case 'memory_retrieved': printMemoryRetrieved(data); break;
+        case 'memory_deleted':  printMemoryDeleted(data);    break;
+        case 'memory_updated':  printMemoryUpdated(data);    break;
         case 'memories_consolidated': printConsolidated(data); break;
         default:
           if (eventName !== 'message') {
@@ -437,6 +465,7 @@ process.on('SIGINT', () => {
   console.log(`  ${bold(cyan('MONITOR SESSION SUMMARY'))}`);
   console.log(`  Session duration:    ${formatUptime(elapsed)}`);
   console.log(`  Memories saved:      ${bold(String(session.saved))}`);
+  console.log(`  Memories retrieved:  ${bold(String(session.retrieved))}`);
   console.log(`  Memories updated:    ${bold(String(session.updated))}`);
   console.log(`  Memories deleted:    ${bold(String(session.deleted))}`);
   console.log(`  Watcher captures:    ${bold(String(session.watcher))}`);

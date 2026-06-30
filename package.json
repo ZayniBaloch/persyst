@@ -1,6 +1,6 @@
 {
   "name": "persyst-mcp",
-  "version": "2.2.6",
+  "version": "2.2.7",
   "description": "Local-first, compliance-grade MCP memory layer with hybrid keyword + semantic search for coding agents",
   "type": "module",
   "main": "index.js",

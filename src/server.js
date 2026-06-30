@@ -349,7 +349,7 @@ async function handleGetRequest(req, res, url) {
     res.write(`event: connected\ndata: ${JSON.stringify({
       ok: true,
       timestamp: new Date().toISOString(),
-      server_version: '2.2.6'
+      server_version: '2.2.7'
     })}\n\n`);
 
     sseClients.add(res);
@@ -365,18 +365,28 @@ async function handleGetRequest(req, res, url) {
     const onDeleted = (data) => {
       try { res.write(`event: memory_deleted\ndata: ${JSON.stringify(data)}\n\n`); } catch (_) {}
     };
+    const onUpdated = (data) => {
+      try { res.write(`event: memory_updated\ndata: ${JSON.stringify(data)}\n\n`); } catch (_) {}
+    };
+    const onRetrieved = (data) => {
+      try { res.write(`event: memory_retrieved\ndata: ${JSON.stringify(data)}\n\n`); } catch (_) {}
+    };
     const onConsolidated = (data) => {
       try { res.write(`event: memories_consolidated\ndata: ${JSON.stringify(data)}\n\n`); } catch (_) {}
     };
 
     memoryEventBus.on('memory_added', onAdded);
     memoryEventBus.on('memory_deleted', onDeleted);
+    memoryEventBus.on('memory_updated', onUpdated);
+    memoryEventBus.on('memory_retrieved', onRetrieved);
     memoryEventBus.on('memories_consolidated', onConsolidated);
 
     req.on('close', () => {
       clearInterval(heartbeat);
       memoryEventBus.off('memory_added', onAdded);
       memoryEventBus.off('memory_deleted', onDeleted);
+      memoryEventBus.off('memory_updated', onUpdated);
+      memoryEventBus.off('memory_retrieved', onRetrieved);
       memoryEventBus.off('memories_consolidated', onConsolidated);
       sseClients.delete(res);
       console.error(`[persyst-sse] Client disconnected. Active: ${sseClients.size}`);
@@ -464,6 +474,16 @@ async function handlePostRequest(req, res, payload) {
       return;
     }
     const results = await searchHybrid(query, limit, agent_id, session_id, agent_id || null);
+    if (results && results.length > 0) {
+      memoryEventBus.emit('memory_retrieved', {
+        tool: 'http/search',
+        query,
+        count: results.length,
+        agent_id: agent_id || 'http',
+        namespace: agent_id || 'shared',
+        memory_ids: results.map(r => r.id)
+      });
+    }
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ success: true, results }));
     return;
@@ -507,6 +527,18 @@ async function handlePostRequest(req, res, payload) {
       return;
     }
     const context = await getOptimizedContext(query, max_tokens, agent_id, session_id, agent_id || null, intent);
+    const retrievedCount = context?.memories?.length ?? 0;
+    if (retrievedCount > 0) {
+      memoryEventBus.emit('memory_retrieved', {
+        tool: 'http/context',
+        query,
+        count: retrievedCount,
+        agent_id: agent_id || 'http',
+        namespace: agent_id || 'shared',
+        token_budget: max_tokens,
+        memory_ids: context.memories.map(m => m.id)
+      });
+    }
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify(context));
     return;

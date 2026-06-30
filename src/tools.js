@@ -314,6 +314,19 @@ export function registerTools(server) {
         // Derive namespace from agent_id or PERSYST_PROJECT env
         const namespace = agent_id || process.env.PERSYST_PROJECT || null;
         const results = await searchHybrid(query, limit, agent_id, session_id, namespace);
+
+        // Broadcast retrieval event to SSE subscribers and monitor
+        if (results && results.length > 0) {
+          memoryEventBus.emit('memory_retrieved', {
+            tool: 'search_memories',
+            query,
+            count: results.length,
+            agent_id: agent_id || 'unknown',
+            namespace: namespace || 'shared',
+            memory_ids: results.map(r => r.id)
+          });
+        }
+
         return text({
           results,
           count: results.length,
@@ -339,6 +352,17 @@ export function registerTools(server) {
         const namespace = agent_id ? agent_id.toLowerCase() : null;
         const memory = getMemory(id, namespace);
         if (!memory) return text({ error: `Memory #${id} not found` });
+
+        // Broadcast retrieval event
+        memoryEventBus.emit('memory_retrieved', {
+          tool: 'get_memory',
+          query: `#${id}`,
+          count: 1,
+          agent_id: agent_id || 'unknown',
+          namespace: memory.namespace || 'shared',
+          memory_ids: [id]
+        });
+
         return text(memory);
       } catch (err) {
         return text({ error: err.message });
@@ -819,6 +843,21 @@ export function registerTools(server) {
       try {
         const namespace = agent_id || process.env.PERSYST_PROJECT || null;
         const contextData = await getOptimizedContext(query, max_tokens, agent_id, session_id, namespace, intent);
+
+        // Broadcast context retrieval event
+        const retrievedCount = contextData?.memories?.length ?? 0;
+        if (retrievedCount > 0) {
+          memoryEventBus.emit('memory_retrieved', {
+            tool: 'get_optimized_context',
+            query,
+            count: retrievedCount,
+            agent_id: agent_id || 'unknown',
+            namespace: namespace || 'shared',
+            token_budget: max_tokens,
+            memory_ids: contextData.memories.map(m => m.id)
+          });
+        }
+
         return text(contextData);
       } catch (err) {
         return text({ error: err.message });

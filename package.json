@@ -15,6 +15,7 @@
     "persyst-mcp": "./index.js",
     "persyst-setup": "./bin/setup.js",
     "persyst-init": "./bin/init.js",
+    "persyst-monitor": "./bin/monitor.js",
     "persyst": "./index.js"
   },
   "engines": {
@@ -31,7 +32,10 @@
   "scripts": {
     "start": "node index.js",
     "test": "cross-env NODE_ENV=test node test/smoke.js",
+    "test:stress": "node test/production_stress_suite.js",
     "test:heavy": "node test/run_sequentially.js",
+    "monitor": "node bin/monitor.js",
+    "monitor:context": "node bin/monitor.js --context",
     "worker": "node bin/extract-worker.js",
     "extract": "node bin/extract.js"
   },
@@ -54,12 +58,12 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/ZayniBaloch/Peryst.git"
+    "url": "git+https://github.com/ZayniBaloch/persyst.git"
   },
   "bugs": {
-    "url": "https://github.com/ZayniBaloch/Peryst/issues"
+    "url": "https://github.com/ZayniBaloch/persyst/issues"
   },
-  "homepage": "https://github.com/ZayniBaloch/Peryst#readme",
+  "homepage": "https://github.com/ZayniBaloch/persyst#readme",
   "dependencies": {
     "@huggingface/transformers": "^4.2.0",
     "@modelcontextprotocol/sdk": "^1.29.0",

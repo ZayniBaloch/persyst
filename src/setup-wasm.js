@@ -9,62 +9,57 @@ const require = createRequire(import.meta.url);
 const onnxWebPath = require.resolve('onnxruntime-web');
 const wasmDir = path.dirname(onnxWebPath);
 
-// Redirect native Node session creation to WebAssembly session creation
 ONNX_NODE.InferenceSession.create = ONNX_WEB.InferenceSession.create;
 
-// Override URL.createObjectURL to return file URL of the existing local file
 const originalCreateObjectURL = URL.createObjectURL;
-URL.createObjectURL = (blob) => {
+const patchedCreateObjectURL = (blob) => {
   const type = blob.type || '';
   if (type.includes('javascript') || type.includes('mjs')) {
     const filePath = path.join(wasmDir, 'ort-wasm-simd-threaded.asyncify.mjs');
-    const fileUrl = pathToFileURL(filePath).href;
-    return fileUrl;
+    return pathToFileURL(filePath).href;
   }
   return originalCreateObjectURL(blob);
 };
+URL.createObjectURL = patchedCreateObjectURL;
 
-// Override global fetch to load ONNX WASM binaries and model files from local disk
+function readLocalFile(filePath, urlStr) {
+  const normalized = path.normalize(filePath);
+  const buffer = fs.readFileSync(normalized);
+  let contentType = 'application/octet-stream';
+  if (normalized.endsWith('.wasm')) contentType = 'application/wasm';
+  else if (normalized.endsWith('.mjs') || normalized.endsWith('.js')) contentType = 'text/javascript';
+  else if (normalized.endsWith('.onnx') || normalized.endsWith('.ort')) contentType = 'application/octet-stream';
+  return new Response(buffer, {
+    status: 200,
+    statusText: 'OK',
+    headers: { 'Content-Type': contentType }
+  });
+}
+
 const originalFetch = globalThis.fetch;
-globalThis.fetch = async (url, options) => {
+const patchedFetch = async (url, options) => {
   const urlStr = typeof url === 'string' ? url : url.url;
-  
-  let isLocal = false;
-  let filePath = '';
-  
-  if (urlStr.startsWith('file://')) {
-    isLocal = true;
-    filePath = fileURLToPath(urlStr);
-  } else if (!urlStr.startsWith('http://') && !urlStr.startsWith('https://') && !urlStr.startsWith('data:')) {
-    isLocal = true;
-    filePath = urlStr;
-  }
-  
-  // Intercept onnxruntime-web CDN URLs and route them to node_modules/onnxruntime-web/dist
+
+  // onnxruntime-web WASM binaries — resolve from node_modules
   if (urlStr.includes('onnxruntime-web') || urlStr.includes('ort-wasm')) {
-    isLocal = true;
     const filename = urlStr.split('/').pop().split('?')[0].split('#')[0];
-    filePath = path.join(wasmDir, filename);
+    return readLocalFile(path.join(wasmDir, filename), urlStr);
   }
-  
-  if (isLocal) {
-    filePath = path.normalize(filePath);
+
+  // file:// URLs — Node.js fetch does not support them natively
+  if (urlStr.startsWith('file://')) {
+    return readLocalFile(fileURLToPath(urlStr), urlStr);
+  }
+
+  // fallback for any non-http/https/data URL (onnxruntime internal schemes, bare paths)
+  if (!urlStr.startsWith('http://') && !urlStr.startsWith('https://') && !urlStr.startsWith('data:')) {
     try {
-      const buffer = fs.readFileSync(filePath);
-      let contentType = 'application/octet-stream';
-      if (filePath.endsWith('.wasm')) contentType = 'application/wasm';
-      else if (filePath.endsWith('.mjs') || filePath.endsWith('.js')) contentType = 'text/javascript';
-      
-      return new Response(buffer, {
-        status: 200,
-        statusText: 'OK',
-        headers: { 'Content-Type': contentType }
-      });
-    } catch (err) {
-      console.error('[persyst] Failed to read local file:', filePath, err.message);
-      throw err;
+      return readLocalFile(urlStr, urlStr);
+    } catch (e) {
+      throw e;
     }
   }
-  
+
   return originalFetch(url, options);
 };
+globalThis.fetch = patchedFetch;

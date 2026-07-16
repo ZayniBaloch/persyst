@@ -12,6 +12,25 @@ You are integrated with Persyst, a local-first MCP memory server that stores use
 - Handle Contradictions: Persyst handles contradiction detection automatically. If a new fact contradicts an old memory, Persyst will flag it.
 - Quality Over Quantity: Do NOT store trivial facts, temporary conversation noise, or duplicate data. "Bad data is worse than no data". Only store long-term architecture decisions, project details, and explicit user preferences.
 
+## Explicit User Save Requests (HARD RULE — NEVER IGNORE)
+If the user says ANY of the following phrases, you MUST immediately call `add_memory` with the content they want saved:
+- "remember that..."
+- "remember to..."
+- "note:", "note that..."
+- "important:", "important:"
+- "don't forget..."
+- "keep in mind..."
+- "FYI:", "heads up:"
+- "save this:", "make a note..."
+- "remind me..."
+
+**Example:**
+> User: "Remember that the staging server is flaky on Mondays"
+> ✅ Immediately call: `add_memory(content="Note: The staging server is flaky on Mondays", importance=0.9)`
+> ❌ WRONG: Acknowledge it verbally without calling add_memory
+
+**These saves are NOT subject to any tech-concept filter. Save exactly what the user asked, even if it is not code-related.**
+
 ## Mandatory Completion Checklist (HARD CONSTRAINT)
 Before writing your final response declaring a task, feature, or bug fix complete:
 1. Ask yourself: "Did I implement a feature, fix a bug, configure a tool, or discover a project rule?"

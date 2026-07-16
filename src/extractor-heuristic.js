@@ -1,25 +1,128 @@
 /**
  * extractor-heuristic.js — Tier 2: Zero-Cost Regex-Based Fact Extractor
  * 
- * Scans raw conversation text for explicit developer preference signals:
- *   "I prefer...", "we decided...", "always use...", "stack includes..."
+ * Scans raw conversation text for extractable knowledge signals.
+ * 
+ * Operates in TWO modes:
+ * 
+ * 1. EXPLICIT SAVE MODE (highest priority, bypasses all filters)
+ *    Triggered when user says: "remember", "save this", "note:", "important:",
+ *    "don't forget", "fyi", "keep in mind", "remind me", "make a note"
+ *    These always get stored — confidence 0.95. No tech filter applied.
+ *    Examples:
+ *      "Remember: the staging server is flaky on Mondays"
+ *      "Note: John handles DB migrations, don't touch those files"
+ *      "Don't forget the SSL cert expires March 15"
+ *      "FYI the client doesn't want emojis in any responses"
+ * 
+ * 2. IMPLICIT PATTERN MODE (normal extraction, requires tech context)
+ *    Regex patterns for common developer signal phrases:
+ *      "I prefer...", "we decided...", "always use...", "stack includes..."
+ *    Conservative: high-precision, low-recall
+ *    Filters non-technical content (noise filter)
  * 
  * Design decisions:
  *   - Runs synchronously — zero latency overhead on the hot path
- *   - Conservative extraction: high-precision, low-recall
  *   - Returns structured facts with confidence scores (0.0 - 1.0)
- *   - Deduplication-ready: facts are normalized before output
- * 
- * This is NOT the primary extraction tier. It's a lightweight safety net
- * that catches the most obvious signals when Tier 3 (LLM) is unavailable
- * or still processing asynchronously.
+ *   - Explicit saves always win — no filter can suppress them
  */
 
 // ============================================================
-// PATTERN DEFINITIONS
+// EXPLICIT SAVE TRIGGERS
+// These phrases indicate the user intentionally wants something saved.
+// Order matters — more specific patterns come first.
+// ============================================================
+
+const EXPLICIT_SAVE_PATTERNS = [
+  // "remember: ..." / "remember that ..." / "remember to ..."
+  {
+    regex: /\bremember(?:\s*[:–—])?\s+(?:that\s+|to\s+)?(.+?)(?:\.|$)/gi,
+    category: 'note',
+    confidence: 0.95
+  },
+  // "note: ..." / "note that ..."
+  {
+    regex: /\bnote(?:\s*[:–—])\s*(.+?)(?:\.|$)/gi,
+    category: 'note',
+    confidence: 0.95
+  },
+  {
+    regex: /\bnote\s+that\s+(.+?)(?:\.|$)/gi,
+    category: 'note',
+    confidence: 0.95
+  },
+  // "important: ..."
+  {
+    regex: /\bimportant(?:\s*[:–—])\s*(.+?)(?:\.|$)/gi,
+    category: 'note',
+    confidence: 0.95
+  },
+  // "fyi: ..." / "fyi, ..."
+  {
+    regex: /\bfyi(?:\s*[:–—,])?\s*(.+?)(?:\.|$)/gi,
+    category: 'note',
+    confidence: 0.90
+  },
+  // "don't forget ..."
+  {
+    regex: /\bdon['']t\s+forget\s+(?:that\s+|to\s+)?(.+?)(?:\.|$)/gi,
+    category: 'reminder',
+    confidence: 0.90
+  },
+  // "keep in mind ..."
+  {
+    regex: /\bkeep\s+in\s+mind\s+(?:that\s+)?(.+?)(?:\.\s*$|$)/gi,
+    category: 'note',
+    confidence: 0.90
+  },
+  // "save this: ..." / "save that ..."
+  {
+    regex: /\bsave\s+(?:this|that|the following)(?:\s*[:–—])?\s*(.+?)(?:\.|$)/gi,
+    category: 'note',
+    confidence: 0.95
+  },
+  // "remind me ..." / "set a reminder ..."
+  {
+    regex: /\bremind\s+(?:me\s+)?(?:to\s+|that\s+|about\s+)?(.+?)(?:\.|$)/gi,
+    category: 'reminder',
+    confidence: 0.90
+  },
+  // "make a note ..." / "take a note ..."
+  {
+    regex: /\b(?:make|take)\s+a\s+note(?:\s*[:–—]|s?\s+that\s+|s?\s+about\s+|:?\s+)?(.+?)(?:\.|$)/gi,
+    category: 'note',
+    confidence: 0.90
+  },
+  // "heads up: ..." / "heads up, ..."
+  {
+    regex: /\bheads?\s+up(?:\s*[:–—,])?\s*(.+?)(?:\.|$)/gi,
+    category: 'note',
+    confidence: 0.90
+  },
+  // "warning: ..." (project context, not log output)
+  {
+    regex: /\bwarning(?:\s*[:–—])\s*(.+?)(?:\.|$)/gi,
+    category: 'note',
+    confidence: 0.85
+  },
+  // "caution: ..."
+  {
+    regex: /\bcaution(?:\s*[:–—])\s*(.+?)(?:\.|$)/gi,
+    category: 'note',
+    confidence: 0.85
+  },
+  // "the rule is ..." / "our rule is ..."
+  {
+    regex: /\b(?:the|our)\s+rule\s+is\s+(?:that\s+)?(.+?)(?:\.|$)/gi,
+    category: 'rule',
+    confidence: 0.90
+  }
+];
+
+// ============================================================
+// IMPLICIT PATTERN DEFINITIONS
 // Ordered by specificity — most specific patterns first
-// Each pattern has: regex, category, confidence, and a template
-// to normalize the matched text into a clean fact statement.
+// Each pattern: regex, category, confidence, template
 // ============================================================
 
 const PATTERNS = [
@@ -77,7 +180,7 @@ const PATTERNS = [
 
   // --- Naming / convention patterns ---
   {
-    regex: /(?:name|call|rename)\s+(?:it|this|the\s+\w+)\s+["'`]?(\w[\w\-\.]+)["'`]?/gi,
+    regex: /(?:name|call|rename)\s+(?:it|this|the\s+\w+)\s+[\"'`]?(\w[\w\-\.]+)[\"'`]?/gi,
     category: 'naming',
     confidence: 0.70,
     template: (match) => `Naming: ${cleanFact(match[0])}`
@@ -101,7 +204,7 @@ const PATTERNS = [
 
   // --- Config / env patterns ---
   {
-    regex: /(?:set|change|update|configure)\s+(?:the\s+)?(?:port|host|env|environment|config|setting)\s+(?:to|=|:)\s*["'`]?(.+?)["'`]?(?:\.|$)/gi,
+    regex: /(?:set|change|update|configure)\s+(?:the\s+)?(?:port|host|env|environment|config|setting)\s+(?:to|=|:)\s*[\"'`]?(.+?)[\"'`]?(?:\.|$)/gi,
     category: 'config',
     confidence: 0.75,
     template: (match) => `Config: ${cleanFact(match[0])}`
@@ -172,6 +275,7 @@ const TECH_CONCEPTS = [
 
 /**
  * Filter out conversational filler and keep only valid technical statements/preferences.
+ * NOTE: This filter is ONLY applied to implicit pattern matches, NOT to explicit saves.
  * @param {string} content - The extracted fact text
  * @returns {boolean} - true if it is a valid, high-value fact
  */
@@ -228,47 +332,119 @@ function cognitiveNoiseFilter(content) {
 }
 
 // ============================================================
+// EXPLICIT SAVE EXTRACTION
+// Runs first. Bypasses all noise filters. 
+// The user said "remember this" — we save it, period.
+// ============================================================
+
+/**
+ * Extract explicitly-commanded saves from text.
+ * User phrases like "remember:", "note:", "don't forget" always get stored.
+ * No tech concept filter. No question filter. Confidence: 0.90–0.95.
+ * 
+ * @param {string} text
+ * @returns {Array<{content: string, category: string, confidence: number, explicit: true}>}
+ */
+function extractExplicitSaves(text) {
+  const results = [];
+  const seen = new Set();
+
+  for (const pattern of EXPLICIT_SAVE_PATTERNS) {
+    pattern.regex.lastIndex = 0;
+    let match;
+    while ((match = pattern.regex.exec(text)) !== null) {
+      const raw = match[1] || match[0];
+      const cleaned = cleanFact(raw);
+
+      // Minimum useful length
+      if (!cleaned || cleaned.length < 8) continue;
+
+      // Skip pure questions
+      if (cleaned.endsWith('?')) continue;
+
+      // Skip if this is just a meta-instruction to the system itself ("remember to search memories")
+      const metaWords = ['search_memories', 'add_memory', 'get_optimized_context', 'persyst tool'];
+      if (metaWords.some(w => cleaned.toLowerCase().includes(w))) continue;
+
+      const key = cleaned.toLowerCase().replace(/\s+/g, ' ').trim();
+      if (seen.has(key)) continue;
+      seen.add(key);
+
+      // Format the content with a Note:/Reminder: prefix if not already prefixed
+      let content = cleaned;
+      if (!/^(?:Note|Reminder|Rule|Important|Warning|Caution|FYI):/i.test(cleaned)) {
+        const prefix = pattern.category === 'reminder' ? 'Reminder' : 'Note';
+        content = `${prefix}: ${cleaned}`;
+      }
+
+      results.push({
+        content,
+        category: pattern.category,
+        confidence: pattern.confidence,
+        explicit: true  // Mark as user-commanded — bypasses any downstream filters
+      });
+    }
+  }
+
+  return results;
+}
+
+// ============================================================
 // MAIN EXTRACTION FUNCTION
 // ============================================================
 
 /**
  * Extract facts from raw conversation text using regex heuristics.
  * 
+ * Runs in priority order:
+ *   1. Explicit saves ("remember:", "note:", "don't forget") — always stored
+ *   2. Implicit patterns (tech decisions, preferences, rules) — filtered
+ * 
  * @param {string} text - Raw conversation text (user prompt or full turn)
  * @param {Object} [options={}]
  * @param {number} [options.minConfidence=0.65] - Minimum confidence to include a fact
- * @param {number} [options.maxFacts=10] - Maximum facts to extract per call
- * @returns {Array<{content: string, category: string, confidence: number}>}
+ * @param {number} [options.maxFacts=15] - Maximum facts to extract per call
+ * @returns {Array<{content: string, category: string, confidence: number, explicit?: boolean}>}
  * 
  * @example
- *   const facts = extractHeuristic("I prefer Postgres over SQLite for our backend database.");
+ *   // Explicit save — bypasses all filters
+ *   extractHeuristic("Remember: the staging server is flaky on Mondays")
+ *   // => [{ content: "Note: the staging server is flaky on Mondays", category: "note", confidence: 0.95, explicit: true }]
+ * 
+ *   // Implicit pattern — goes through noise filter
+ *   extractHeuristic("I prefer Postgres over SQLite for our backend database.")
  *   // => [{ content: "Preference: Postgres over SQLite", category: "preference", confidence: 0.80 }]
  */
 export function extractHeuristic(text, options = {}) {
   const {
     minConfidence = 0.65,
-    maxFacts = 10
+    maxFacts = 15
   } = options;
 
   if (!text || typeof text !== 'string' || text.length < 10) {
     return [];
   }
 
-  const facts = [];
-  const seen = new Set(); // dedup by normalized content
+  // Strip all markdown fenced code blocks to prevent extracting facts from example code/logs
+  const cleanSourceText = text.replace(/```[\s\S]*?```/g, '');
 
-  // Process line-by-line to filter noise
-  const lines = text.split('\n');
+  // --- Step 1: Explicit saves (highest priority, no filter) ---
+  const explicitFacts = extractExplicitSaves(cleanSourceText);
+
+  // --- Step 2: Implicit pattern matching (filtered, tech-required) ---
+  const implicitFacts = [];
+  const seen = new Set(explicitFacts.map(f => f.content.toLowerCase().replace(/\s+/g, ' ').trim()));
+
+  // Process line-by-line to filter code/noise
+  const lines = cleanSourceText.split('\n');
   const cleanLines = lines.filter(line => !isNoiseLine(line));
   const cleanText = cleanLines.join('\n');
 
   for (const pattern of PATTERNS) {
-    // Reset regex state for global matching
     pattern.regex.lastIndex = 0;
 
     let match;
     while ((match = pattern.regex.exec(cleanText)) !== null) {
-      // Skip matches that are too short to be meaningful
       if (match[0].length < 8) continue;
 
       try {
@@ -277,33 +453,30 @@ export function extractHeuristic(text, options = {}) {
 
         if (!cognitiveNoiseFilter(content)) continue;
 
-        // Normalize for dedup
         const key = content.toLowerCase().replace(/\s+/g, ' ').trim();
         if (seen.has(key)) continue;
         seen.add(key);
 
         if (pattern.confidence >= minConfidence) {
-          facts.push({
+          implicitFacts.push({
             content,
             category: pattern.category,
             confidence: pattern.confidence
           });
         }
 
-        if (facts.length >= maxFacts) break;
+        if (explicitFacts.length + implicitFacts.length >= maxFacts) break;
       } catch (_) {
-        // Template execution failed — skip this match
         continue;
       }
     }
 
-    if (facts.length >= maxFacts) break;
+    if (explicitFacts.length + implicitFacts.length >= maxFacts) break;
   }
 
-  // Sort by confidence descending
-  facts.sort((a, b) => b.confidence - a.confidence);
-
-  return facts;
+  // Explicit facts first (user-commanded), then implicit sorted by confidence
+  implicitFacts.sort((a, b) => b.confidence - a.confidence);
+  return [...explicitFacts, ...implicitFacts];
 }
 
 /**
@@ -316,9 +489,17 @@ export function extractHeuristic(text, options = {}) {
 export function hasExtractableSignals(text) {
   if (!text || text.length < 10) return false;
 
+  // Check explicit save triggers first (very cheap)
+  for (const pattern of EXPLICIT_SAVE_PATTERNS) {
+    pattern.regex.lastIndex = 0;
+    if (pattern.regex.test(text)) return true;
+  }
+
+  // Then implicit patterns
   for (const pattern of PATTERNS) {
     pattern.regex.lastIndex = 0;
     if (pattern.regex.test(text)) return true;
   }
+
   return false;
 }

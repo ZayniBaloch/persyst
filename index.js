@@ -18,7 +18,9 @@
 // If running inside Bun (like Qwen's internal runtime), spawn Node.js instead
 if (process.versions.bun && !process.env.PERSYST_RUN_BY_NODE) {
   const { spawn } = await import('child_process');
-  const child = spawn('C:\\Program Files\\nodejs\\node.exe', [
+  // Prefer NODE env var (set by nvm/fnm/volta), then fall back to 'node' on PATH
+  const nodeExec = process.env.NODE || 'node';
+  const child = spawn(nodeExec, [
     process.argv[1],
     ...process.argv.slice(2)
   ], {
@@ -37,22 +39,42 @@ if (process.versions.bun && !process.env.PERSYST_RUN_BY_NODE) {
 
 // Fix PATH on Windows if running in environments like Qwen Desktop that override PATH
 if (process.platform === 'win32') {
-  const nodeBin = 'C:\\Program Files\\nodejs';
-  const gitBin = 'C:\\Program Files\\Git\\cmd';
-  const systemBin = 'C:\\WINDOWS\\system32;C:\\WINDOWS';
-  
   const currentPath = process.env.PATH || '';
   const paths = currentPath.split(';');
-  
-  if (!paths.includes(nodeBin)) paths.push(nodeBin);
-  if (!paths.includes(gitBin)) paths.push(gitBin);
-  
-  // Make sure system folders are there
+
+  // Dynamically find node and git on PATH using where.exe
+  const { execFileSync } = await import('child_process');
+  for (const cmd of ['node', 'git']) {
+    try {
+      const result = execFileSync('where.exe', [cmd], { encoding: 'utf8', timeout: 2000 });
+      const binDir = result.trim().split('\r\n')[0].trim();
+      if (binDir) {
+        const dir = binDir.substring(0, binDir.lastIndexOf('\\'));
+        if (dir && !paths.some(p => p.toLowerCase() === dir.toLowerCase())) {
+          paths.push(dir);
+        }
+      }
+    } catch {
+      // where.exe failed — fall back to common paths
+      if (cmd === 'node') {
+        for (const p of ['C:\\Program Files\\nodejs', process.env.NVM_SYMLINK, `${process.env.USERPROFILE}\\AppData\\Roaming\\nvm\\v20.11.0`].filter(Boolean)) {
+          if (!paths.some(ex => ex.toLowerCase() === p.toLowerCase())) paths.push(p);
+        }
+      } else if (cmd === 'git') {
+        for (const p of ['C:\\Program Files\\Git\\cmd', 'C:\\Program Files\\Git\\bin', `${process.env.LOCALAPPDATA}\\Programs\\Git\\cmd`].filter(Boolean)) {
+          if (!paths.some(ex => ex.toLowerCase() === p.toLowerCase())) paths.push(p);
+        }
+      }
+    }
+  }
+
+  // Ensure system folders are present
+  const systemBin = 'C:\\WINDOWS\\system32;C:\\WINDOWS';
   const sysPaths = systemBin.split(';');
   sysPaths.forEach(p => {
-    if (!paths.includes(p)) paths.push(p);
+    if (!paths.some(ex => ex.toLowerCase() === p.toLowerCase())) paths.push(p);
   });
-  
+
   process.env.PATH = paths.join(';');
 }
 
@@ -80,6 +102,14 @@ if (subcommand === 'setup') {
 } else if (subcommand === 'worker') {
   // Run the background extraction worker directly
   await import('./bin/extract-worker.js');
+} else if (subcommand === 'export') {
+  // Export memories to a JSONL file
+  process.argv.splice(2, 1);
+  await import('./bin/export.js');
+} else if (subcommand === 'import') {
+  // Import memories from a JSONL file
+  process.argv.splice(2, 1);
+  await import('./bin/import.js');
 } else {
   // Default: start the MCP server
   const { startServer } = await import('./src/server.js');

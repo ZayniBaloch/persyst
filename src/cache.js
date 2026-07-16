@@ -10,6 +10,8 @@
  * - Full invalidation on write operations
  */
 
+import { logInfo } from './text-utils.js';
+
 /**
  * Simple LRU (Least Recently Used) cache with TTL support.
  */
@@ -97,7 +99,7 @@ export class LRUCache {
     const size = this.cache.size;
     this.cache.clear();
     if (size > 0) {
-      console.error(`[persyst-cache] Invalidated ${size} cached entries`);
+      logInfo(`[persyst-cache] Invalidated ${size} cached entries`);
     }
   }
 

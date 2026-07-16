@@ -66,13 +66,21 @@ async function run() {
   assert(recentBIds.includes(agentBId), 'Agent-b sees own memory');
   assert(!recentBIds.includes(agentAId), 'Agent-b does NOT see agent-a memory');
 
-  // 6. Test: no namespace = sees all
-  console.log('\n🔍 Step 6: Global (no namespace) visibility');
-  const recentAll = getRecentMemories(50, null);
+  // 6. Test: no namespace = defaults to shared (secure isolation)
+  console.log('\n🔍 Step 6: Default namespace (null) visibility (should default to shared)');
+  const recentDefault = getRecentMemories(50, null);
+  const recentDefaultIds = recentDefault.map(m => m.id);
+  assert(recentDefaultIds.includes(sharedId), 'Default namespace sees shared');
+  assert(!recentDefaultIds.includes(agentAId), 'Default namespace does NOT see agent-a');
+  assert(!recentDefaultIds.includes(agentBId), 'Default namespace does NOT see agent-b');
+
+  // 6b. Test: namespace 'all' = retrieves all (admin/system override)
+  console.log('\n🔍 Step 6b: Namespace "all" visibility (should see everything)');
+  const recentAll = getRecentMemories(50, 'all');
   const recentAllIds = recentAll.map(m => m.id);
-  assert(recentAllIds.includes(sharedId), 'Global sees shared');
-  assert(recentAllIds.includes(agentAId), 'Global sees agent-a');
-  assert(recentAllIds.includes(agentBId), 'Global sees agent-b');
+  assert(recentAllIds.includes(sharedId), 'Namespace "all" sees shared');
+  assert(recentAllIds.includes(agentAId), 'Namespace "all" sees agent-a');
+  assert(recentAllIds.includes(agentBId), 'Namespace "all" sees agent-b');
 
   // 7. Test: getMemoryById with namespace filter
   console.log('\n🔍 Step 7: getMemoryById namespace filtering');

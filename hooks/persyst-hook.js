@@ -33,6 +33,7 @@ import { dirname, resolve, join } from 'path';
 import { spawn } from 'child_process';
 import { writeFileSync, readdirSync, mkdirSync, existsSync } from 'fs';
 import { homedir } from 'os';
+import http from 'http';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -85,6 +86,59 @@ function readStdin() {
 // MCP CLIENT CONNECTION
 // ============================================================
 
+let isHttpAvailable = true;
+let stdioClient = null;
+
+async function getStdioClient() {
+  if (stdioClient) return stdioClient;
+  stdioClient = await connectToPersyst();
+  return stdioClient;
+}
+
+function callToolViaHttp(toolName, args, timeoutMs = 150) {
+  return new Promise((resolve, reject) => {
+    const payload = JSON.stringify({ name: toolName, arguments: args });
+    const req = http.request({
+      hostname: '127.0.0.1',
+      port: 4321,
+      path: '/tool',
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Content-Length': Buffer.byteLength(payload)
+      }
+    });
+
+    req.setTimeout(timeoutMs, () => {
+      req.destroy();
+      reject(new Error('HTTP timeout'));
+    });
+
+    req.on('response', (res) => {
+      if (res.statusCode !== 200) {
+        reject(new Error(`HTTP status ${res.statusCode}`));
+        return;
+      }
+      let data = '';
+      res.on('data', chunk => { data += chunk; });
+      res.on('end', () => {
+        try {
+          resolve(JSON.parse(data));
+        } catch (e) {
+          reject(e);
+        }
+      });
+    });
+
+    req.on('error', (err) => {
+      reject(err);
+    });
+
+    req.write(payload);
+    req.end();
+  });
+}
+
 /**
  * Connect to the Persyst MCP server as a client.
  * Uses StdioClientTransport to spawn and communicate with the server.
@@ -121,7 +175,20 @@ async function connectToPersyst() {
  * Call a Persyst MCP tool and parse the JSON result.
  */
 async function callTool(client, toolName, args) {
-  const result = await client.callTool({ name: toolName, arguments: args });
+  if (isHttpAvailable) {
+    try {
+      const httpResult = await callToolViaHttp(toolName, args, 150);
+      if (httpResult && httpResult.content && httpResult.content[0] && httpResult.content[0].text) {
+        return JSON.parse(httpResult.content[0].text);
+      }
+    } catch (err) {
+      isHttpAvailable = false;
+      process.stderr.write(`[persyst-hook] HTTP Gateway call failed (${err.message}). Falling back to stdio client.\n`);
+    }
+  }
+
+  const activeClient = await getStdioClient();
+  const result = await activeClient.callTool({ name: toolName, arguments: args });
   if (result.content && result.content[0] && result.content[0].text) {
     return JSON.parse(result.content[0].text);
   }
@@ -214,12 +281,11 @@ function spawnWorker() {
 /**
  * Handle SessionStart: load project-wide context and ingest git history.
  */
-async function handleSessionStart(client, input) {
+async function handleSessionStart(input) {
   const cwd = input.cwd || process.cwd();
   const repoName = cwd.replace(/\\/g, '/').split('/').pop();
 
-  // 1. Get project-wide memory context
-  const contextResult = await callTool(client, 'get_optimized_context', {
+  const contextResult = await callTool(null, 'get_optimized_context', {
     query: `Project ${repoName} conventions, architecture, user preferences, coding rules`,
     max_tokens: 2000,
     agent_id: 'claude-code',
@@ -228,7 +294,7 @@ async function handleSessionStart(client, input) {
 
   // 2. Ingest recent git commits (best-effort, don't fail if not a git repo)
   try {
-    await callTool(client, 'ingest_git_commits', {
+    await callTool(null, 'ingest_git_commits', {
       repo_path: cwd,
       count: 15
     });
@@ -245,11 +311,11 @@ async function handleSessionStart(client, input) {
   // 4. Get memory count for status line
   let memoryCount = 0;
   try {
-    const recentResult = await callTool(client, 'get_recent_memories', { limit: 1 });
+    const recentResult = await callTool(null, 'get_recent_memories', { limit: 1 });
     if (recentResult && recentResult.count !== undefined) {
       // The count from get_recent is just the returned count, not total
       // Use a search to estimate total active memories
-      const importantResult = await callTool(client, 'get_important_memories', { limit: 100 });
+      const importantResult = await callTool(null, 'get_important_memories', { limit: 100 });
       memoryCount = importantResult?.count || 0;
     }
   } catch (_) {
@@ -272,7 +338,7 @@ async function handleSessionStart(client, input) {
  * Handle UserPromptSubmit: search for memories relevant to the user's prompt.
  * Also runs Tier 2 heuristic extraction inline (zero-cost).
  */
-async function handleUserPromptSubmit(client, input) {
+async function handleUserPromptSubmit(input) {
   const prompt = input.prompt || '';
 
   // Skip trivial prompts (commands, confirmations, short inputs)
@@ -300,7 +366,7 @@ async function handleUserPromptSubmit(client, input) {
 
   // --- Memory Retrieval (existing behavior) ---
   // Use search_memories for speed on per-prompt lookups (faster than get_optimized_context)
-  const searchResult = await callTool(client, 'search_memories', {
+  const searchResult = await callTool(null, 'search_memories', {
     query: prompt.slice(0, 200), // Truncate very long prompts for search efficiency
     limit: 5,
     agent_id: 'claude-code',
@@ -360,8 +426,6 @@ async function handleStop(input) {
 // ============================================================
 
 async function main() {
-  let client = null;
-
   try {
     const input = await readStdin();
     const eventName = input.hook_event_name;
@@ -379,17 +443,15 @@ async function main() {
       return;
     }
 
-    // Connect to Persyst with hard timeout
     const hookStart = Date.now();
-    client = await connectToPersyst();
 
     let response;
     if (eventName === 'SessionStart') {
-      response = await handleSessionStart(client, input);
+      response = await handleSessionStart(input);
     } else if (eventName === 'UserPromptSubmit') {
       // Apply hard timeout for prompt-time hook execution
       response = await Promise.race([
-        handleUserPromptSubmit(client, input),
+        handleUserPromptSubmit(input),
         new Promise((resolve) =>
           setTimeout(() => {
             process.stderr.write(`[persyst-hook] UserPromptSubmit hit ${MAX_HOOK_LATENCY_MS}ms timeout, returning partial.\n`);
@@ -409,8 +471,8 @@ async function main() {
     console.log(JSON.stringify({}));
   } finally {
     // Clean up MCP connection
-    if (client) {
-      try { await client.close(); } catch (_) {}
+    if (stdioClient) {
+      try { await stdioClient.close(); } catch (_) {}
     }
     process.exit(0);
   }

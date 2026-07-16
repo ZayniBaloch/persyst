@@ -19,6 +19,8 @@ env.useWasmCache = false;
 // The embedding pipeline (lazy-loaded on first use)
 let extractor = null;
 
+import { logInfo } from './text-utils.js';
+
 /**
  * Load the embedding model. Called automatically on first use.
  * First run downloads the model (~50MB). Subsequent runs use cache.
@@ -26,9 +28,9 @@ let extractor = null;
 async function loadModel() {
   if (extractor) return;
 
-  console.error('[persyst] Loading embedding model (first run downloads ~50MB)...');
+  logInfo('[persyst] Loading embedding model (first run downloads ~50MB)...');
   extractor = await pipeline('feature-extraction', 'Xenova/all-MiniLM-L6-v2');
-  console.error('[persyst] Embedding model loaded ✓');
+  logInfo('[persyst] Embedding model loaded ✓');
 }
 
 /**

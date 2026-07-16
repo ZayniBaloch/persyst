@@ -1,17 +1,22 @@
 {
   "name": "persyst-mcp",
-  "version": "2.2.1",
-  "description": "Local-first MCP memory server with hybrid keyword + semantic search for coding agents",
+  "version": "2.2.8",
+  "description": "Local-first, compliance-grade MCP memory layer with hybrid keyword + semantic search for coding agents",
   "type": "module",
   "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./sdk": {
+      "types": "./src/sdk.d.ts",
+      "default": "./src/sdk.js"
+    }
+  },
   "bin": {
     "persyst-mcp": "index.js",
     "persyst-setup": "bin/setup.js",
-    "persyst-aider": "bin/aider.js",
     "persyst-init": "bin/init.js",
-    "persyst-ingest": "bin/ingest.js",
-    "persyst-extract": "bin/extract.js",
-    "persyst-worker": "bin/extract-worker.js"
+    "persyst-monitor": "bin/monitor.js",
+    "persyst": "index.js"
   },
   "engines": {
     "node": ">=18.0.0"
@@ -27,7 +32,10 @@
   "scripts": {
     "start": "node index.js",
     "test": "cross-env NODE_ENV=test node test/smoke.js",
-    "test:heavy": "cross-env NODE_ENV=test node --test --test-concurrency=1 test/test_*.js",
+    "test:stress": "node test/production_stress_suite.js",
+    "test:heavy": "node test/run_sequentially.js",
+    "monitor": "node bin/monitor.js",
+    "monitor:context": "node bin/monitor.js --context",
     "worker": "node bin/extract-worker.js",
     "extract": "node bin/extract.js"
   },
@@ -50,16 +58,17 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/ZayniBaloch/Peryst.git"
+    "url": "git+https://github.com/ZayniBaloch/persyst.git"
   },
   "bugs": {
-    "url": "https://github.com/ZayniBaloch/Peryst/issues"
+    "url": "https://github.com/ZayniBaloch/persyst/issues"
   },
-  "homepage": "https://github.com/ZayniBaloch/Peryst#readme",
+  "homepage": "https://github.com/ZayniBaloch/persyst#readme",
   "dependencies": {
     "@huggingface/transformers": "^4.2.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "better-sqlite3": "^12.10.0",
+    "chokidar": "^5.0.0",
     "sqlite-vec": "^0.1.9",
     "zod": "^3.23.0"
   },

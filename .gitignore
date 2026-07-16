@@ -1,6 +1,22 @@
 node_modules/
 *.db
-db/*.db
 .env
 .DS_Store
 Thumbs.db
+.persyst/
+.vercel/
+coverage/
+.nyc_output/
+dist/
+*.log
+test_watcher_temp/
+.mcp.json
+
+# Local generated rules & IDE agent configs
+.agents/
+.cursorrules
+.windsurfrules
+.clinerules
+.persystrules.md
+PERYST_TECHNICAL_MANUAL.pdf
+

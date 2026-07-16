@@ -14,8 +14,10 @@
 import { z } from 'zod';
 import { generateEmbedding } from './embeddings.js';
 import db, {
+  stmts,
   insertMemory,
   insertVector,
+  redactSecrets,
   getMemory,
   updateMemoryContent,
   deleteMemory,
@@ -45,9 +47,11 @@ import db, {
   getNamespaceStats
 } from './database.js';
 import { searchHybrid, getOptimizedContext, consolidateMemories } from './search.js';
+import { jaccardDistance } from './text-utils.js';
 import { getRecentCommits } from './git.js';
 import { verifyChainIntegrity } from './attestation.js';
 import { searchCache } from './cache.js';
+import { memoryEventBus } from './events.js';
 
 // ============================================================
 // CONSTANTS
@@ -101,6 +105,159 @@ function validateMemoryContent(content) {
 }
 
 /**
+ * Internal logic for storing a new memory (dedup, vector creation, contradiction detection).
+ * Shared by both the stdio MCP tool and the HTTP Gateway server.
+ */
+export async function addMemoryInternal({ content, importance = 1.0, agent_id, session_id, shared = true }) {
+  try {
+    const normalizedAgentId = agent_id ? agent_id.toLowerCase() : null;
+
+    // Redact secrets/credentials on write
+    const redactedContent = redactSecrets(content);
+
+    // Bug 7 + Feature 4: Validate content size
+    const validation = validateMemoryContent(redactedContent);
+    if (!validation.valid) {
+      return { error: validation.error };
+    }
+
+    // Derive namespace from agent_id, project env, and shared flag
+    const project = process.env.PERSYST_PROJECT;
+    const defaultNs = project || 'shared';
+    const namespace = (shared && !project) ? 'shared' : (normalizedAgentId || defaultNs);
+
+    // Deduplication check (namespace-aware)
+    const existing = getMemoryByContent(redactedContent, namespace);
+    if (existing) {
+      // Re-attribute provenance to the calling agent if it was previously auto-attributed to log-watcher
+      const prov = getProvenance(existing.id);
+      if (prov && (prov.source_id === 'antigravity-worker' || prov.source_id === 'user-dialogue') && normalizedAgentId) {
+        try {
+          stmts.updateProvenanceOwner.run(normalizedAgentId, existing.id);
+          incrementAgentStat(normalizedAgentId, 'created');
+        } catch (e) {
+          console.error(`[persyst] Re-attribute provenance error: ${e.message}`);
+        }
+      }
+      boostMemory(existing.id);
+      return {
+        success: true,
+        id: existing.id,
+        namespace,
+        message: `Memory #${existing.id} already exists. Boosted importance.`
+      };
+    }
+
+    const id = insertMemory(redactedContent, importance, {
+      source_type: normalizedAgentId ? 'agent' : 'manual',
+      source_id: normalizedAgentId,
+      confidence: 1.0
+    }, namespace);
+
+    const embedding = await generateEmbedding(redactedContent);
+    insertVector(id, embedding);
+
+    // Feature 1: Invalidate search cache on write
+    searchCache.invalidate();
+
+    // Broadcast to SSE subscribers (HTTP gateway + SSE clients)
+    memoryEventBus.emit('memory_added', { id, content: redactedContent, namespace, source: normalizedAgentId || 'manual' });
+
+    // Feature 2: Contradiction Detection
+    let contradictions = [];
+    try {
+      const similarHits = searchVector(embedding, 20);
+      for (const hit of similarHits) {
+        const hitId = Number(hit.rowid);
+        if (hitId === id) continue; // Skip self
+
+        const sim = Math.max(0, 1 - (hit.distance * hit.distance) / 2);
+        if (sim > 0.70) {
+          const existingMemory = getMemoryById(hitId, namespace);
+          if (!existingMemory) continue;
+
+          const jaccard = jaccardDistance(redactedContent, existingMemory.content);
+          // Contradiction: similar topic (high similarity), but differing key terms
+          if (jaccard > 0 && jaccard < 0.65) {
+            // Fetch provenances for trust calculation
+            const oldProv = getProvenance(hitId);
+            let oldReputation = 1.0;
+            if (oldProv && oldProv.source_type === 'agent' && oldProv.source_id) {
+              const agentRow = stmts.getReputationScore.get(oldProv.source_id);
+              if (agentRow) oldReputation = agentRow.reputation_score;
+            }
+
+            let newReputation = 1.0;
+            if (normalizedAgentId) {
+              const agentRow = stmts.getReputationScore.get(normalizedAgentId);
+              if (agentRow) newReputation = agentRow.reputation_score;
+            }
+
+            const trustOld = (oldProv ? oldProv.confidence : 1.0) * oldReputation;
+            const trustNew = 1.0 * newReputation; // New confidence is 1.0
+
+            const isSelfUpdate = oldProv && oldProv.source_type === 'agent' && oldProv.source_id === normalizedAgentId;
+
+            if (isSelfUpdate) {
+              continue; // Same agent: treat as complementary, not contradictory
+            }
+
+            if (trustNew > trustOld) {
+              // New is preferred
+              logContradiction(hitId, id, `Auto-detected contradiction: new memory is more trustworthy (similarity: ${sim.toFixed(3)}, content_diff: ${jaccard.toFixed(3)})`);
+              contradictions.push({
+                old_memory_id: hitId,
+                old_content_preview: existingMemory.content.slice(0, 100),
+                similarity: sim.toFixed(4),
+                content_difference: jaccard.toFixed(4),
+                resolution: 'replaced_old'
+              });
+            } else {
+              // Old is preferred
+              logContradiction(id, hitId, `Auto-detected contradiction: existing memory is more trustworthy (similarity: ${sim.toFixed(3)}, content_diff: ${jaccard.toFixed(3)})`);
+              contradictions.push({
+                old_memory_id: hitId,
+                old_content_preview: existingMemory.content.slice(0, 100),
+                similarity: sim.toFixed(4),
+                content_difference: jaccard.toFixed(4),
+                resolution: 'kept_old'
+              });
+              break; // New memory was archived, stop contradiction check
+            }
+          }
+        }
+      }
+    } catch (e) {
+      console.error(`[persyst] Contradiction detection error: ${e.message}`);
+    }
+
+    const result = { success: true, id, namespace, message: `Memory #${id} stored` };
+    if (contradictions.length > 0) {
+      result.contradictions_detected = contradictions;
+      result.message += `. Detected ${contradictions.length} contradiction(s) — older memories archived.`;
+    }
+
+    return result;
+  } catch (err) {
+    return { error: err.message };
+  }
+}
+
+const toolHandlers = new Map();
+
+/**
+ * Programmatically execute any registered MCP tool.
+ * Used by the HTTP Gateway server to route requests to tool handlers.
+ */
+export async function executeToolInternal(name, args) {
+  const handler = toolHandlers.get(name);
+  if (!handler) {
+    throw new Error(`Tool ${name} not found`);
+  }
+  return await handler(args);
+}
+
+/**
  * Register all MCP tools on the server.
  * @param {McpServer} server - The MCP server instance
  * @returns {number} The total count of registered tools
@@ -109,6 +266,11 @@ export function registerTools(server) {
   let count = 0;
   const originalTool = server.tool.bind(server);
   server.tool = (...args) => {
+    const name = args[0];
+    const handler = args[args.length - 1];
+    if (typeof handler === 'function') {
+      toolHandlers.set(name, handler);
+    }
     originalTool(...args);
     count++;
   };
@@ -129,127 +291,11 @@ export function registerTools(server) {
       shared: z.boolean().default(true).describe('If true, memory is visible to all agents. If false, only visible to this agent.')
     },
     async ({ content, importance, agent_id, session_id, shared }) => {
-      try {
-        const normalizedAgentId = agent_id ? agent_id.toLowerCase() : null;
-
-        // Bug 7 + Feature 4: Validate content size
-        const validation = validateMemoryContent(content);
-        if (!validation.valid) {
-          return text({ error: validation.error });
-        }
-
-        // Derive namespace from agent_id and shared flag
-        const namespace = (shared || !normalizedAgentId) ? 'shared' : normalizedAgentId;
-
-        // Deduplication check (namespace-aware)
-        const existing = getMemoryByContent(content, namespace);
-        if (existing) {
-          // Re-attribute provenance to the calling agent if it was previously auto-attributed to log-watcher
-          const prov = getProvenance(existing.id);
-          if (prov && (prov.source_id === 'antigravity-worker' || prov.source_id === 'user-dialogue') && normalizedAgentId) {
-            try {
-              db.prepare("UPDATE provenance SET source_type = 'agent', source_id = ?, confidence = 1.0 WHERE memory_id = ?")
-                .run(normalizedAgentId, existing.id);
-              incrementAgentStat(normalizedAgentId, 'created');
-            } catch (e) {
-              console.error(`[persyst] Re-attribute provenance error: ${e.message}`);
-            }
-          }
-          boostMemory(existing.id);
-          return text({
-            success: true,
-            id: existing.id,
-            namespace,
-            message: `Memory #${existing.id} already exists. Boosted importance.`
-          });
-        }
-
-        const id = insertMemory(content, importance, {
-          source_type: normalizedAgentId ? 'agent' : 'manual',
-          source_id: normalizedAgentId,
-          confidence: 1.0
-        }, namespace);
-
-        const embedding = await generateEmbedding(content);
-        insertVector(id, embedding);
-
-        // Feature 1: Invalidate search cache on write
-        searchCache.invalidate();
-
-        // Feature 2: Contradiction Detection
-        let contradictions = [];
-        try {
-          const similarHits = searchVector(embedding, 20);
-          for (const hit of similarHits) {
-            const hitId = Number(hit.rowid);
-            if (hitId === id) continue; // Skip self
-
-            const sim = Math.max(0, 1 - (hit.distance * hit.distance) / 2);
-            if (sim > 0.70) {
-              const existingMemory = getMemoryById(hitId, namespace);
-              if (!existingMemory) continue;
-
-              const jaccard = jaccardDistance(content, existingMemory.content);
-              // Contradiction: similar topic (high similarity), but differing key terms
-              if (jaccard > 0 && jaccard < 0.65) {
-                // Fetch provenances for trust calculation
-                const oldProv = getProvenance(hitId);
-                let oldReputation = 1.0;
-                if (oldProv && oldProv.source_type === 'agent' && oldProv.source_id) {
-                  const agentRow = db.prepare('SELECT reputation_score FROM agent_stats WHERE agent_id = ?').get(oldProv.source_id);
-                  if (agentRow) oldReputation = agentRow.reputation_score;
-                }
-
-                let newReputation = 1.0;
-                if (normalizedAgentId) {
-                  const agentRow = db.prepare('SELECT reputation_score FROM agent_stats WHERE agent_id = ?').get(normalizedAgentId);
-                  if (agentRow) newReputation = agentRow.reputation_score;
-                }
-
-                const trustOld = (oldProv ? oldProv.confidence : 1.0) * oldReputation;
-                const trustNew = 1.0 * newReputation; // New confidence is 1.0
-
-                const isSelfUpdate = oldProv && oldProv.source_type === 'agent' && oldProv.source_id === normalizedAgentId;
-
-                if (isSelfUpdate || trustNew > trustOld) {
-                  // New is preferred
-                  logContradiction(hitId, id, `Auto-detected contradiction: new memory is more trustworthy (similarity: ${sim.toFixed(3)}, content_diff: ${jaccard.toFixed(3)})`);
-                  contradictions.push({
-                    old_memory_id: hitId,
-                    old_content_preview: existingMemory.content.slice(0, 100),
-                    similarity: sim.toFixed(4),
-                    content_difference: jaccard.toFixed(4),
-                    resolution: 'replaced_old'
-                  });
-                } else {
-                  // Old is preferred
-                  logContradiction(id, hitId, `Auto-detected contradiction: existing memory is more trustworthy (similarity: ${sim.toFixed(3)}, content_diff: ${jaccard.toFixed(3)})`);
-                  contradictions.push({
-                    old_memory_id: hitId,
-                    old_content_preview: existingMemory.content.slice(0, 100),
-                    similarity: sim.toFixed(4),
-                    content_difference: jaccard.toFixed(4),
-                    resolution: 'kept_old'
-                  });
-                  break; // New memory was archived, stop contradiction check
-                }
-              }
-            }
-          }
-        } catch (e) {
-          console.error(`[persyst] Contradiction detection error: ${e.message}`);
-        }
-
-        const result = { success: true, id, namespace, message: `Memory #${id} stored` };
-        if (contradictions.length > 0) {
-          result.contradictions_detected = contradictions;
-          result.message += `. Detected ${contradictions.length} contradiction(s) — older memories archived.`;
-        }
-
-        return text(result);
-      } catch (err) {
-        return text({ error: err.message });
+      const res = await addMemoryInternal({ content, importance, agent_id, session_id, shared });
+      if (res.error) {
+        return text({ error: res.error });
       }
+      return text(res);
     }
   );
 
@@ -259,15 +305,28 @@ export function registerTools(server) {
     'Search memories using hybrid keyword + semantic search with cryptographic attestation. CRITICAL: Call this tool at the start of a session or task to retrieve relevant user preferences, coding guidelines, and past decisions.',
     {
       query: z.string().describe('What to search for'),
-      limit: z.number().default(5).describe('Max results (default: 5)'),
+      limit: z.number().int().min(1).default(5).describe('Max results (default: 5)'),
       agent_id: z.string().optional().describe('Agent ID — filters results to this agent\'s namespace + shared'),
       session_id: z.string().optional().describe('Session ID')
     },
     async ({ query, limit, agent_id, session_id }) => {
       try {
-        // Derive namespace from agent_id (null = search all)
-        const namespace = agent_id || null;
+        // Derive namespace from agent_id or PERSYST_PROJECT env
+        const namespace = agent_id || process.env.PERSYST_PROJECT || null;
         const results = await searchHybrid(query, limit, agent_id, session_id, namespace);
+
+        // Broadcast retrieval event to SSE subscribers and monitor
+        if (results && results.length > 0) {
+          memoryEventBus.emit('memory_retrieved', {
+            tool: 'search_memories',
+            query,
+            count: results.length,
+            agent_id: agent_id || 'unknown',
+            namespace: namespace || 'shared',
+            memory_ids: results.map(r => r.id)
+          });
+        }
+
         return text({
           results,
           count: results.length,
@@ -285,12 +344,25 @@ export function registerTools(server) {
     'get_memory',
     'Get a specific memory by its ID. Boosts its importance automatically.',
     {
-      id: z.number().describe('Memory ID to retrieve')
+      id: z.number().describe('Memory ID to retrieve'),
+      agent_id: z.string().optional().describe('Agent ID — restricts access to this agent\'s namespace + shared')
     },
-    async ({ id }) => {
+    async ({ id, agent_id }) => {
       try {
-        const memory = getMemory(id);
+        const namespace = agent_id ? agent_id.toLowerCase() : null;
+        const memory = getMemory(id, namespace);
         if (!memory) return text({ error: `Memory #${id} not found` });
+
+        // Broadcast retrieval event
+        memoryEventBus.emit('memory_retrieved', {
+          tool: 'get_memory',
+          query: `#${id}`,
+          count: 1,
+          agent_id: agent_id || 'unknown',
+          namespace: memory.namespace || 'shared',
+          memory_ids: [id]
+        });
+
         return text(memory);
       } catch (err) {
         return text({ error: err.message });
@@ -311,13 +383,17 @@ export function registerTools(server) {
       try {
         const normalizedAgentId = agent_id ? agent_id.toLowerCase() : null;
 
+        // Redact secrets/credentials on update
+        const redactedContent = redactSecrets(content);
+
         // Bug 7 + Feature 4: Validate content size
-        const validation = validateMemoryContent(content);
+        const validation = validateMemoryContent(redactedContent);
         if (!validation.valid) {
           return text({ error: validation.error });
         }
 
-        const oldMemory = getMemory(id);
+        const namespace = normalizedAgentId;
+        const oldMemory = getMemory(id, namespace);
         if (!oldMemory) return text({ error: `Memory #${id} not found` });
 
         // Retrieve old agent_id from provenance
@@ -326,7 +402,7 @@ export function registerTools(server) {
 
         // Insert new version
         const newId = insertMemory(
-          content,
+          redactedContent,
           oldMemory.importance_score,
           {
             source_type: resolvedAgentId ? 'agent' : 'manual',
@@ -337,7 +413,7 @@ export function registerTools(server) {
           id
         );
 
-        const embedding = await generateEmbedding(content);
+        const embedding = await generateEmbedding(redactedContent);
         insertVector(newId, embedding);
 
         // Record contradiction and archive the old one
@@ -345,6 +421,9 @@ export function registerTools(server) {
 
         // Feature 1: Invalidate search cache on write
         searchCache.invalidate();
+
+        // Broadcast update to SSE subscribers
+        memoryEventBus.emit('memory_updated', { old_id: id, new_id: newId, namespace: oldMemory.namespace || 'shared' });
 
         return text({
           success: true,
@@ -362,15 +441,23 @@ export function registerTools(server) {
     'delete_memory',
     'Permanently delete a memory by its ID.',
     {
-      id: z.number().describe('Memory ID to delete')
+      id: z.number().describe('Memory ID to delete'),
+      agent_id: z.string().optional().describe('Agent ID — restricts deletion to this agent\'s namespace + shared')
     },
-    async ({ id }) => {
+    async ({ id, agent_id }) => {
       try {
+        const namespace = agent_id ? agent_id.toLowerCase() : null;
+        const memory = getMemory(id, namespace);
+        if (!memory) return text({ error: `Memory #${id} not found` });
+
         const deleted = deleteMemory(id);
         if (!deleted) return text({ error: `Memory #${id} not found` });
 
         // Feature 1: Invalidate search cache on write
         searchCache.invalidate();
+
+        // Broadcast deletion to SSE subscribers
+        memoryEventBus.emit('memory_deleted', { id, namespace: memory.namespace || 'shared' });
 
         return text({ success: true, id, message: `Memory #${id} deleted` });
       } catch (err) {
@@ -384,12 +471,12 @@ export function registerTools(server) {
     'get_recent_memories',
     'Get the most recently created memories, newest first. Filtered by agent namespace if agent_id is provided.',
     {
-      limit: z.number().default(10).describe('How many to return (default: 10)'),
+      limit: z.number().int().min(1).default(10).describe('How many to return (default: 10)'),
       agent_id: z.string().optional().describe('Agent ID — filters to this agent\'s namespace + shared')
     },
     async ({ limit, agent_id }) => {
       try {
-        const namespace = agent_id || null;
+        const namespace = agent_id || process.env.PERSYST_PROJECT || null;
         const memories = getRecentMemories(limit, namespace);
         return text({ memories, count: memories.length, namespace: namespace || 'all' });
       } catch (err) {
@@ -403,12 +490,12 @@ export function registerTools(server) {
     'get_important_memories',
     'Get memories ranked by importance score, highest first. Filtered by agent namespace if agent_id is provided.',
     {
-      limit: z.number().default(10).describe('How many to return (default: 10)'),
+      limit: z.number().int().min(1).default(10).describe('How many to return (default: 10)'),
       agent_id: z.string().optional().describe('Agent ID — filters to this agent\'s namespace + shared')
     },
     async ({ limit, agent_id }) => {
       try {
-        const namespace = agent_id || null;
+        const namespace = agent_id || process.env.PERSYST_PROJECT || null;
         const memories = getImportantMemories(limit, namespace);
         return text({ memories, count: memories.length, namespace: namespace || 'all' });
       } catch (err) {
@@ -444,7 +531,7 @@ export function registerTools(server) {
             source_type: 'git',
             source_id: commit.hash,
             confidence: 0.8
-          });
+          }, process.env.PERSYST_PROJECT || 'shared');
 
           const embedding = await generateEmbedding(commit.fullText);
           insertVector(id, embedding);
@@ -507,14 +594,16 @@ export function registerTools(server) {
     {
       entity_name: z.string().describe('Name of the entity'),
       memory_id: z.number().describe('ID of the memory to link'),
-      relation: z.string().default('mentions').describe('Relationship type')
+      relation: z.string().default('mentions').describe('Relationship type'),
+      agent_id: z.string().optional().describe('Agent ID — restricts linking to this agent\'s namespace + shared')
     },
-    async ({ entity_name, memory_id, relation }) => {
+    async ({ entity_name, memory_id, relation, agent_id }) => {
       try {
+        const namespace = agent_id ? agent_id.toLowerCase() : null;
         const entity = getEntityByName(entity_name);
         if (!entity) return text({ error: `Entity "${entity_name}" not found.` });
 
-        const memory = getMemory(memory_id);
+        const memory = getMemory(memory_id, namespace);
         if (!memory) return text({ error: `Memory #${memory_id} not found` });
 
         insertEdge(entity.id, memory_id, relation, 'entity', 'memory');
@@ -747,12 +836,28 @@ export function registerTools(server) {
       query: z.string().describe('The search query context'),
       max_tokens: z.number().default(4000).describe('Token budget for LLM context compression (default: 4000)'),
       agent_id: z.string().optional().describe('Agent ID requesting context — filters to this agent\'s namespace + shared'),
-      session_id: z.string().optional().describe('Session ID')
+      session_id: z.string().optional().describe('Session ID'),
+      intent: z.string().optional().describe('The active task intent / category (e.g. debugging, ui_styling, database_management)')
     },
-    async ({ query, max_tokens, agent_id, session_id }) => {
+    async ({ query, max_tokens, agent_id, session_id, intent }) => {
       try {
-        const namespace = agent_id || null;
-        const contextData = await getOptimizedContext(query, max_tokens, agent_id, session_id, namespace);
+        const namespace = agent_id || process.env.PERSYST_PROJECT || null;
+        const contextData = await getOptimizedContext(query, max_tokens, agent_id, session_id, namespace, intent);
+
+        // Broadcast context retrieval event
+        const retrievedCount = contextData?.memories?.length ?? 0;
+        if (retrievedCount > 0) {
+          memoryEventBus.emit('memory_retrieved', {
+            tool: 'get_optimized_context',
+            query,
+            count: retrievedCount,
+            agent_id: agent_id || 'unknown',
+            namespace: namespace || 'shared',
+            token_budget: max_tokens,
+            memory_ids: contextData.memories.map(m => m.id)
+          });
+        }
+
         return text(contextData);
       } catch (err) {
         return text({ error: err.message });
@@ -789,27 +894,6 @@ function text(data) {
   return {
     content: [{ type: 'text', text: JSON.stringify(data, null, 2) }]
   };
-}
-
-/**
- * Compute Jaccard distance between two text strings.
- * Used for contradiction detection — higher distance means more different content.
- * @param {string} a - First text
- * @param {string} b - Second text
- * @returns {number} Distance score between 0 (identical) and 1 (completely different)
- */
-function jaccardDistance(a, b) {
-  const wordsA = new Set(a.toLowerCase().split(/\s+/));
-  const wordsB = new Set(b.toLowerCase().split(/\s+/));
-
-  let intersection = 0;
-  for (const word of wordsA) {
-    if (wordsB.has(word)) intersection++;
-  }
-
-  const union = wordsA.size + wordsB.size - intersection;
-  if (union === 0) return 0;
-  return 1 - (intersection / union);
 }
 
 /**

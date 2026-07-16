@@ -8,23 +8,27 @@
 
 import { join, resolve } from 'path';
 import { homedir } from 'os';
-import { existsSync, readFileSync, writeFileSync, readdirSync, statSync } from 'fs';
+import { existsSync, readFileSync, writeFileSync, readdirSync, statSync, openSync, readSync, closeSync } from 'fs';
 import {
   getWatchPosition,
   upsertWatchPosition,
   insertMemory,
   insertVector,
-  memoryExists
+  memoryExists,
+  deleteMemory
 } from './database.js';
 import { generateEmbedding } from './embeddings.js';
-import { extractHeuristic } from './extractor-heuristic.js';
+import { extractHeuristic, hasExtractableSignals } from './extractor-heuristic.js';
 import { searchHybrid } from './search.js';
 import { searchCache } from './cache.js';
+import { memoryEventBus } from './events.js';
+import { logInfo } from './text-utils.js';
+import chokidar from 'chokidar';
 
-// Config path: ~/.persyst/config.json
-const CONFIG_FILE = join(homedir(), '.persyst', 'config.json');
+// Config path: ~/.persyst/config.json (overridable for tests)
+const CONFIG_FILE = process.env.PERSYST_CONFIG_FILE || join(homedir(), '.persyst', 'config.json');
 
-let intervalId = null;
+let chokidarWatcher = null;
 const DEDUP_THRESHOLD = 0.80;
 
 /**
@@ -86,24 +90,46 @@ async function processJsonlFile(filePath) {
 
     if (stat.size <= lastPos) return;
 
-    // Read only new content appended to the file
-    const fileBuffer = readFileSync(filePath);
-    const newContentBuffer = fileBuffer.subarray(lastPos, stat.size);
-    const text = newContentBuffer.toString('utf8');
+    // Read only new content appended to the file (Bug C fix)
+    const length = stat.size - lastPos;
+    let text = '';
+    if (length > 0) {
+      const newContentBuffer = Buffer.alloc(length);
+      const fd = openSync(filePath, 'r');
+      try {
+        readSync(fd, newContentBuffer, 0, length, lastPos);
+      } finally {
+        closeSync(fd);
+      }
+      text = newContentBuffer.toString('utf8');
+    }
 
     const lines = text.split('\n');
     let addedCount = 0;
+    let processedOffset = lastPos;
 
-    for (const line of lines) {
-      if (!line.trim()) continue;
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      const isLastLine = i === lines.length - 1;
+
+      // Empty trailing line after a newline is expected; skip it without treating it as partial.
+      if (!line.trim()) {
+        if (!isLastLine) processedOffset += line.length + 1;
+        continue;
+      }
 
       let record;
       try {
         record = JSON.parse(line);
       } catch (_) {
-        // Line might be incomplete/partially written — skip and parse next time
+        // If the last line fails to parse, it may be partially written. Leave processedOffset
+        // before this line so the next scan re-reads it from the start.
+        if (!isLastLine) processedOffset += line.length + 1;
         continue;
       }
+
+      // Commit the bytes for this line (including the newline that produced the split).
+      processedOffset += line.length + 1;
 
       // Check if it's user prompt or assistant response
       if (
@@ -112,30 +138,40 @@ async function processJsonlFile(filePath) {
       ) {
         // Strip XML/markdown wrapper tags (like <USER_REQUEST> or <ADDITIONAL_METADATA>)
         const cleanText = record.content.replace(/<[^>]+>[\s\S]*?<\/[^>]+>/g, '').trim();
-        if (cleanText.length < 15) continue;
+        if (cleanText.length < 15 || !hasExtractableSignals(cleanText)) continue;
 
         const facts = extractHeuristic(cleanText);
         for (const fact of facts) {
-          // Verify against exact duplicate
-          if (memoryExists(fact.content)) continue;
+          // Verify against exact duplicate (Bug A fix: check namespace 'shared')
+          if (memoryExists(fact.content, 'shared')) continue;
 
-          // Verify against semantic similarity
-          const similar = await searchHybrid(fact.content, 1);
+          // Verify against semantic similarity (Bug B fix: check namespace 'shared')
+          const similar = await searchHybrid(fact.content, 1, null, null, 'shared');
           if (similar.length > 0 && parseFloat(similar[0].similarity) >= DEDUP_THRESHOLD) {
             continue;
           }
 
-          // Insert memory with provenance
+          // Insert memory with provenance (written to project namespace or 'shared')
+          const watcherNs = process.env.PERSYST_PROJECT || 'shared';
           const id = insertMemory(fact.content, fact.confidence, {
             source_type: 'agent',
             source_id: record.source === 'MODEL' ? 'antigravity-worker' : 'user-dialogue',
             confidence: fact.confidence
-          });
+          }, watcherNs);
 
-          const embedding = await generateEmbedding(fact.content);
-          insertVector(id, embedding);
+          try {
+            const embedding = await generateEmbedding(fact.content);
+            insertVector(id, embedding);
+          } catch (embedErr) {
+            console.error(`[persyst-watcher] Embedding failed for fact #${id}: ${embedErr.message}`);
+            // Clean up: delete the memory so we don't have orphaned entries
+            try { deleteMemory(id); } catch (_) {}
+            continue;
+          }
+
           addedCount++;
           console.error(`[persyst-watcher] Auto-extracted fact: "${fact.content}" (Memory #${id})`);
+          memoryEventBus.emit('memory_added', { id, content: fact.content, namespace: watcherNs, source: 'watcher-antigravity' });
         }
       }
     }
@@ -144,10 +180,13 @@ async function processJsonlFile(filePath) {
       searchCache.invalidate();
     }
 
-    // Persist new byte offset position
-    upsertWatchPosition(filePath, stat.size);
+    // Persist the byte offset up to the last successfully parsed complete line.
+    // Do not advance past an incomplete trailing line so it is re-read on the next scan.
+    upsertWatchPosition(filePath, processedOffset);
+    return addedCount;
   } catch (err) {
     console.error(`[persyst-watcher] Failed to process JSONL file ${filePath}: ${err.message}`);
+    return 0;
   }
 }
 
@@ -175,15 +214,16 @@ async function processJsonFile(filePath) {
     // Process only newly added messages
     for (let i = lastMsgCount; i < history.length; i++) {
       const msg = history[i];
-      if (!msg.content || typeof msg.content !== 'string') continue;
+      if (!msg.content || typeof msg.content !== 'string' || !hasExtractableSignals(msg.content)) continue;
 
       // Filter out system message structures
       if (msg.role === 'user' || msg.role === 'assistant') {
         const facts = extractHeuristic(msg.content);
         for (const fact of facts) {
-          if (memoryExists(fact.content)) continue;
+          const watcherNs = process.env.PERSYST_PROJECT || 'shared';
+          if (memoryExists(fact.content, watcherNs)) continue;
 
-          const similar = await searchHybrid(fact.content, 1);
+          const similar = await searchHybrid(fact.content, 1, null, null, watcherNs);
           if (similar.length > 0 && parseFloat(similar[0].similarity) >= DEDUP_THRESHOLD) {
             continue;
           }
@@ -192,12 +232,20 @@ async function processJsonFile(filePath) {
             source_type: 'agent',
             source_id: msg.role === 'assistant' ? 'roo-worker' : 'user-dialogue',
             confidence: fact.confidence
-          });
+          }, watcherNs);
 
-          const embedding = await generateEmbedding(fact.content);
-          insertVector(id, embedding);
+          try {
+            const embedding = await generateEmbedding(fact.content);
+            insertVector(id, embedding);
+          } catch (embedErr) {
+            console.error(`[persyst-watcher] Embedding failed for fact #${id}: ${embedErr.message}`);
+            try { deleteMemory(id); } catch (_) {}
+            continue;
+          }
+
           addedCount++;
           console.error(`[persyst-watcher] Auto-extracted fact: "${fact.content}" (Memory #${id})`);
+          memoryEventBus.emit('memory_added', { id, content: fact.content, namespace: watcherNs, source: 'watcher-roo' });
         }
       }
     }
@@ -208,8 +256,10 @@ async function processJsonFile(filePath) {
 
     // Persist message count index
     upsertWatchPosition(filePath, history.length);
+    return addedCount;
   } catch (err) {
     console.error(`[persyst-watcher] Failed to process JSON file ${filePath}: ${err.message}`);
+    return 0;
   }
 }
 
@@ -248,6 +298,7 @@ function findFiles(dir, ext, depth = 3) {
  */
 export async function scanDirectories() {
   const watchDirs = loadWatchedDirs();
+  let totalAdded = 0;
 
   for (const dir of watchDirs) {
     if (!existsSync(dir)) continue;
@@ -255,7 +306,7 @@ export async function scanDirectories() {
     // Scan for JSONL (Antigravity transcripts)
     const jsonlFiles = findFiles(dir, 'transcript.jsonl', 3);
     for (const file of jsonlFiles) {
-      await processJsonlFile(file);
+      totalAdded += await processJsonlFile(file);
     }
 
     // Scan for JSON (Roo Code / Cline task files)
@@ -263,9 +314,63 @@ export async function scanDirectories() {
     for (const file of jsonFiles) {
       // Avoid processing general configurations/settings files
       if (file.includes('tasks')) {
-        await processJsonFile(file);
+        totalAdded += await processJsonFile(file);
       }
     }
+  }
+
+  // Auto-consolidate memories if new ones were added to keep prompt context slim
+  if (totalAdded > 0) {
+    try {
+      console.error(`[persyst-watcher] Running automatic memory consolidation sweep...`);
+      const { consolidateMemories } = await import('./search.js');
+      const report = await consolidateMemories();
+      console.error(`[persyst-watcher] Auto-consolidation complete: merged ${report.consolidated_groups} duplicate groups.`);
+    } catch (e) {
+      console.error(`[persyst-watcher] Auto-consolidation failed: ${e.message}`);
+    }
+  }
+
+  // Run periodic auto-expiry check on every folder scan (fast query)
+  try {
+    const { archiveExpiredMemories } = await import('./database.js');
+    archiveExpiredMemories();
+  } catch (e) {
+    console.error(`[persyst-watcher] Auto-expiry execution failed: ${e.message}`);
+  }
+}
+
+/**
+ * Handle a file addition or modification event from Chokidar.
+ * @param {string} filePath 
+ */
+async function handleFileChange(filePath) {
+  const normalizedPath = filePath.replace(/\\/g, '/');
+  let addedCount = 0;
+  
+  if (normalizedPath.endsWith('transcript.jsonl')) {
+    addedCount = await processJsonlFile(filePath);
+  } else if (normalizedPath.endsWith('.json') && normalizedPath.includes('tasks')) {
+    addedCount = await processJsonFile(filePath);
+  }
+
+  if (addedCount > 0) {
+    try {
+      console.error(`[persyst-watcher] Running automatic memory consolidation sweep...`);
+      const { consolidateMemories } = await import('./search.js');
+      const report = await consolidateMemories();
+      console.error(`[persyst-watcher] Auto-consolidation complete: merged ${report.consolidated_groups} duplicate groups.`);
+    } catch (e) {
+      console.error(`[persyst-watcher] Auto-consolidation failed: ${e.message}`);
+    }
+  }
+
+  // Run periodic auto-expiry check on every change (fast query)
+  try {
+    const { archiveExpiredMemories } = await import('./database.js');
+    archiveExpiredMemories();
+  } catch (e) {
+    console.error(`[persyst-watcher] Auto-expiry execution failed: ${e.message}`);
   }
 }
 
@@ -273,34 +378,52 @@ export async function scanDirectories() {
  * Start the background log watcher daemon.
  */
 export function startWatcher() {
-  if (intervalId) return;
+  if (chokidarWatcher) return;
 
-  console.error('[persyst-watcher] Starting background log watcher daemon...');
-  // Warm up config/paths
-  loadWatchedDirs();
+  logInfo('[persyst-watcher] Starting background log watcher daemon (Chokidar)...');
+  const watchDirs = loadWatchedDirs();
 
-  // Run initial scan
-  scanDirectories().catch(err => {
-    console.error(`[persyst-watcher] Initial scan failed: ${err.message}`);
-  });
+  // Run initial scan, then start watching
+  scanDirectories()
+    .catch(err => {
+      console.error(`[persyst-watcher] Initial scan failed: ${err.message}`);
+    })
+    .then(() => {
+      if (chokidarWatcher) return;
+      chokidarWatcher = chokidar.watch(watchDirs, {
+        persistent: true,
+        ignoreInitial: true, // we already ran scanDirectories
+        awaitWriteFinish: {
+          stabilityThreshold: 300,
+          pollInterval: 100
+        }
+      });
 
-  // Polling directory scan every 5 seconds
-  intervalId = setInterval(async () => {
-    try {
-      await scanDirectories();
-    } catch (err) {
-      console.error(`[persyst-watcher] Folder scan failed: ${err.message}`);
-    }
-  }, 5000);
+      chokidarWatcher.on('add', filePath => {
+        handleFileChange(filePath).catch(err => {
+          console.error(`[persyst-watcher] Error handling added file ${filePath}:`, err);
+        });
+      });
+
+      chokidarWatcher.on('change', filePath => {
+        handleFileChange(filePath).catch(err => {
+          console.error(`[persyst-watcher] Error handling changed file ${filePath}:`, err);
+        });
+      });
+
+      chokidarWatcher.on('error', err => {
+        console.error(`[persyst-watcher] Chokidar watcher error: ${err.message}`);
+      });
+    });
 }
 
 /**
  * Stop the background log watcher daemon.
  */
 export function stopWatcher() {
-  if (intervalId) {
-    clearInterval(intervalId);
-    intervalId = null;
-    console.error('[persyst-watcher] Background log watcher daemon stopped.');
+  if (chokidarWatcher) {
+    chokidarWatcher.close().catch(() => {});
+    chokidarWatcher = null;
+    logInfo('[persyst-watcher] Background log watcher daemon stopped.');
   }
 }

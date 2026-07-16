@@ -8,6 +8,7 @@
  */
 
 import db, {
+  stmts,
   searchKeyword,
   searchVector,
   getMemoryById,
@@ -19,6 +20,7 @@ import db, {
 import { generateEmbedding } from './embeddings.js';
 import { createAttestation } from './attestation.js';
 import { searchCache, LRUCache } from './cache.js';
+import { jaccardSimilarity, logInfo } from './text-utils.js';
 
 let lastDataVersion = 0;
 
@@ -33,6 +35,12 @@ let lastDataVersion = 0;
  * @returns {Promise<Array>} Ranked search results (with .attestation property attached)
  */
 export async function searchHybrid(queryText, limit = 5, agentId = null, sessionId = null, namespace = null, skipAttestation = false) {
+  if (typeof limit !== 'number' || isNaN(limit) || limit <= 0) {
+    throw new Error('Limit must be a positive integer.');
+  }
+  const parsedLimit = Math.floor(limit);
+  const ns = namespace || 'shared';
+
   // Sync in-memory cache with external DB changes using sqlite data_version
   try {
     const currentDataVersion = db.pragma('data_version', { simple: true });
@@ -46,23 +54,23 @@ export async function searchHybrid(queryText, limit = 5, agentId = null, session
 
   // --- Check LRU cache first (Feature 1) ---
   // Include namespace in cache key to prevent cross-namespace cache hits
-  const cacheKey = LRUCache.key(`${namespace || 'all'}:${queryText}`, limit);
+  const cacheKey = LRUCache.key(`${ns}:${queryText}`, parsedLimit);
   const cached = searchCache.get(cacheKey);
   if (cached) {
-    console.error(`[persyst-cache] Cache HIT for query: "${queryText.slice(0, 50)}..."`);
+    logInfo(`[persyst-cache] Cache HIT for query: "${queryText.slice(0, 50)}..."`);
     return cached;
   }
 
   // --- Step 1: Keyword search (fast, exact matches) ---
-  const keywordHits = searchKeyword(queryText, limit * 2);
+  const keywordHits = searchKeyword(queryText, parsedLimit * 2);
   const keywordIds = new Set(keywordHits.map(r => r.id));
 
   // --- Step 2: Semantic search (meaning-based) ---
   const queryEmbedding = await generateEmbedding(queryText);
-  const vecHits = searchVector(queryEmbedding, limit * 2);
+  const vecHits = searchVector(queryEmbedding, parsedLimit * 2);
 
   const semanticResults = vecHits.map(r => ({
-    id: r.rowid,
+    id: Number(r.rowid),
     distance: r.distance,
     // Convert L2 distance to 0-1 similarity score
     similarity: Math.max(0, 1 - (r.distance * r.distance) / 2)
@@ -99,7 +107,7 @@ export async function searchHybrid(queryText, limit = 5, agentId = null, session
   const finalResults = combined
     .map(r => {
       // Use namespace-aware getMemoryById to filter by agent namespace
-      const memory = getMemoryById(r.id, namespace);
+      const memory = getMemoryById(r.id, ns);
       if (!memory) return null; // Memory was archived, deleted, or not in namespace
 
       // Boost memory access metrics
@@ -110,7 +118,7 @@ export async function searchHybrid(queryText, limit = 5, agentId = null, session
       let reputationWarning = false;
       const prov = memory.provenance;
       if (prov && prov.source_type === 'agent' && prov.source_id) {
-        const agentRow = db.prepare('SELECT reputation_score FROM agent_stats WHERE agent_id = ?').get(prov.source_id);
+        const agentRow = stmts.getReputationScore.get(prov.source_id);
         if (agentRow) {
           reputationScore = agentRow.reputation_score;
           if (reputationScore < 0.5) {
@@ -128,8 +136,8 @@ export async function searchHybrid(queryText, limit = 5, agentId = null, session
         importance_score: memory.importance_score,
         created_at: memory.created_at,
         last_accessed: memory.last_accessed,
-        similarity: r.similarity.toFixed(4),
-        hybrid_score: finalScore.toFixed(4),
+        similarity: Math.round(r.similarity * 10000) / 10000,
+        hybrid_score: Math.round(finalScore * 10000) / 10000,
         keyword_match: r.keyword_match,
         reputation_warning: reputationWarning,
         provenance: prov
@@ -141,7 +149,7 @@ export async function searchHybrid(queryText, limit = 5, agentId = null, session
   finalResults.sort((a, b) => parseFloat(b.hybrid_score) - parseFloat(a.hybrid_score));
 
   // --- Step 5: Apply MMR for diverse retrieval (Feature 3) ---
-  const mmrResults = applyMMR(finalResults, limit);
+  const mmrResults = applyMMR(finalResults, parsedLimit);
 
   // Generate cryptographic attestation for audit trails (skip if called internally)
   let attestation = null;
@@ -212,27 +220,6 @@ function applyMMR(candidates, limit, lambda = 0.7) {
 }
 
 /**
- * Compute Jaccard similarity between two text strings.
- * Uses word-level tokenization for efficiency.
- * 
- * @param {string} a - First text
- * @param {string} b - Second text
- * @returns {number} Similarity score between 0 and 1
- */
-function jaccardSimilarity(a, b) {
-  const wordsA = new Set(a.toLowerCase().split(/\s+/));
-  const wordsB = new Set(b.toLowerCase().split(/\s+/));
-  
-  let intersection = 0;
-  for (const word of wordsA) {
-    if (wordsB.has(word)) intersection++;
-  }
-  
-  const union = wordsA.size + wordsB.size - intersection;
-  return union === 0 ? 0 : intersection / union;
-}
-
-/**
  * Optimizes the retrieved context by walking the knowledge graph and compressing content to fit max_tokens.
  * 
  * @param {string} queryText - User's query
@@ -240,7 +227,14 @@ function jaccardSimilarity(a, b) {
  * @param {string|null} agentId - Querying agent identifier
  * @param {string|null} sessionId - Current session ID
  */
-export async function getOptimizedContext(queryText, maxTokens, agentId = null, sessionId = null, namespace = null) {
+export async function getOptimizedContext(queryText, maxTokens, agentId = null, sessionId = null, namespace = null, intentParam = null) {
+  // Classify intent and urgency early to adjust token budget dynamically
+  const { intent, urgency } = classifyIntentAndUrgency(queryText, intentParam);
+  let targetMaxTokens = maxTokens;
+  if (intent === 'general' || intent === 'testing') {
+    targetMaxTokens = Math.min(maxTokens, 1500);
+  }
+
   // Extract entities mentioned in the query text to seed the graph search directly
   const entities = getAllEntities(100);
   const matchedEntityIds = new Set();
@@ -296,11 +290,7 @@ export async function getOptimizedContext(queryText, maxTokens, agentId = null, 
     if (depth >= 6) continue;
 
     // --- 2a. Explicit Graph Edges (from edges table) ---
-    const connectedEdges = db.prepare(`
-      SELECT * FROM edges 
-      WHERE (source_id = ? AND source_type = ?)
-         OR (target_id = ? AND target_type = ?)
-    `).all(id, type, id, type);
+    const connectedEdges = stmts.getEdgesBySourceAndType.all(id, type, id, type);
 
     for (const edge of connectedEdges) {
       let nextId, nextType;
@@ -321,7 +311,7 @@ export async function getOptimizedContext(queryText, maxTokens, agentId = null, 
 
     // --- 2b. Implicit Name-Based Edges (for robustness when explicit edges are missing) ---
     if (type === 'memory') {
-      const memoryRow = db.prepare('SELECT content FROM memories WHERE id = ?').get(id);
+      const memoryRow = stmts.getMemoryContentById.get(id);
       if (memoryRow && memoryRow.content) {
         const contentLower = memoryRow.content.toLowerCase();
         for (const ent of entities) {
@@ -337,7 +327,7 @@ export async function getOptimizedContext(queryText, maxTokens, agentId = null, 
     } else if (type === 'entity') {
       const ent = entities.find(e => e.id === id);
       if (ent && ent.name) {
-        const matchingMemories = db.prepare('SELECT id FROM memories WHERE content LIKE ? AND valid_until IS NULL').all(`%${ent.name}%`);
+        const matchingMemories = stmts.getMemoryLikeContent.all(`%${ent.name}%`);
         for (const row of matchingMemories) {
           const nextKey = `memory:${row.id}`;
           if (!visitedNodes.has(nextKey)) {
@@ -403,31 +393,51 @@ export async function getOptimizedContext(queryText, maxTokens, agentId = null, 
   // 4. Sort candidates
   list.sort((a, b) => b.score - a.score);
 
-  // 5. Compress context to fit maxTokens
+  // 5. Compress context to fit maxTokens with on-the-fly diversity check
   let currentTokens = 0;
   const accepted = [];
 
   for (const c of list) {
-    // Heuristic: ~4 characters per token + format headers (~15 tokens)
-    const estimatedTokens = Math.max(1, Math.ceil(c.content.length / 4) + 15);
-    if (currentTokens + estimatedTokens > maxTokens) {
+    // Skip if too similar to any already accepted memory to prevent redundant context bloat
+    let isRedundant = false;
+    for (const acc of accepted) {
+      const sim = jaccardSimilarity(c.content, acc.content);
+      if (sim > 0.60) {
+        isRedundant = true;
+        break;
+      }
+    }
+    if (isRedundant) continue;
+
+    // Heuristic: ~4 characters per token + format headers (~3 tokens for compact format)
+    const estimatedTokens = Math.max(1, Math.ceil(c.content.length / 4) + 3);
+    if (currentTokens + estimatedTokens > targetMaxTokens) {
       continue;
     }
     currentTokens += estimatedTokens;
     accepted.push(c);
   }
 
+  const suggested_actions = generateSuggestedActions(accepted, intent, urgency);
+
   // 6. Format LLM injection context string
   let context = '=== RETRIEVED AGENT MEMORY CONTEXT ===\n';
+  context += `[Intent: ${intent} | Urgency: ${urgency}]\n\n`;
+
+  if (suggested_actions.length > 0) {
+    context += '[Suggested Actions]\n';
+    for (const action of suggested_actions) {
+      context += `• ${action}\n`;
+    }
+    context += '\n';
+  }
+
+  context += '[Memories]\n';
   if (accepted.length === 0) {
     context += 'No relevant memories retrieved.\n';
   } else {
     for (const a of accepted) {
-      let sourceTag = 'Source: manual';
-      if (a.provenance) {
-        sourceTag = `Source: ${a.provenance.source_type}${a.provenance.source_id ? ` (${a.provenance.source_id})` : ''}`;
-      }
-      context += `[Memory #${a.id}] (Score: ${a.score.toFixed(4)}, ${sourceTag})\n${a.content}\n---\n`;
+      context += `#${a.id}: ${a.content}\n`;
     }
   }
   context += '=== END OF CONTEXT ===';
@@ -441,7 +451,10 @@ export async function getOptimizedContext(queryText, maxTokens, agentId = null, 
   return {
     context,
     memories: accepted,
-    attestation
+    attestation,
+    intent,
+    urgency,
+    suggested_actions
   };
 }
 
@@ -508,26 +521,22 @@ export async function consolidateMemories(namespace = null) {
   const consolidated = [];
   const visited = new Set();
 
-  for (const mem of activeMemories) {
-    if (visited.has(mem.id)) continue;
+  // Wrap all mutations in a transaction so a partial failure rolls back.
+  const consolidateOne = db.transaction((mem) => {
+    if (visited.has(mem.id)) return;
 
     // Search for similar memories
-    const embedding = db.prepare('SELECT embedding FROM memories_vec WHERE rowid = ?').get(mem.id);
-    if (!embedding) continue;
+    const embedding = stmts.getVecByRowId.get(mem.id);
+    if (!embedding) return;
 
-    const hits = db.prepare(`
-      SELECT rowid AS id, distance
-      FROM memories_vec
-      WHERE embedding MATCH ?
-      AND k = 30
-    `).all(embedding.embedding);
+    const hits = stmts.consolidateVecSearch.all(embedding.embedding);
 
     const group = [];
     for (const hit of hits) {
       if (visited.has(Number(hit.id))) continue;
       const sim = Math.max(0, 1 - (hit.distance * hit.distance) / 2);
       if (sim > 0.80) {
-        const other = db.prepare('SELECT * FROM memories WHERE id = ? AND valid_until IS NULL').get(Number(hit.id));
+        const other = stmts.getMemoryByIdRaw.get(Number(hit.id));
         if (other) {
           group.push(other);
         }
@@ -540,7 +549,7 @@ export async function consolidateMemories(namespace = null) {
         const prov = getProvenance(m.id);
         let reputation = 1.0;
         if (prov && prov.source_type === 'agent' && prov.source_id) {
-          const agentRow = db.prepare('SELECT reputation_score FROM agent_stats WHERE agent_id = ?').get(prov.source_id);
+          const agentRow = stmts.getReputationScore.get(prov.source_id);
           if (agentRow) reputation = agentRow.reputation_score;
         }
         return (prov ? prov.confidence : 1.0) * reputation;
@@ -559,50 +568,32 @@ export async function consolidateMemories(namespace = null) {
         const rel = checkRelationship(canonical.content, current.content);
 
         if (rel.type === 'contradiction') {
-          // Resolve contradiction: keep canonical, archive current
-          db.prepare('UPDATE memories SET valid_until = unixepoch() WHERE id = ?').run(current.id);
-          db.prepare('INSERT INTO contradictions (old_memory_id, new_memory_id, resolution_reason) VALUES (?, ?, ?)')
-            .run(current.id, canonical.id, `Consolidated contradiction: resolved in favor of canonical #${canonical.id}`);
-
-          // Apply reputation changes since it's a cross-agent contradiction
-          const oldProv = getProvenance(current.id);
-          const newProv = getProvenance(canonical.id);
-          if (oldProv && oldProv.source_type === 'agent' && oldProv.source_id) {
-            const isSelf = newProv && newProv.source_type === 'agent' && newProv.source_id === oldProv.source_id;
-            if (!isSelf) {
-              db.prepare('UPDATE agent_stats SET memories_contradicted = memories_contradicted + 1 WHERE agent_id = ?').run(oldProv.source_id);
-              db.prepare('UPDATE agent_stats SET reputation_score = (memories_confirmed + 1.0) / (memories_contradicted + 1.0) WHERE agent_id = ?').run(oldProv.source_id);
-              if (newProv && newProv.source_type === 'agent') {
-                db.prepare('UPDATE agent_stats SET memories_confirmed = memories_confirmed + 1 WHERE agent_id = ?').run(newProv.source_id);
-                db.prepare('UPDATE agent_stats SET reputation_score = (memories_confirmed + 1.0) / (memories_contradicted + 1.0) WHERE agent_id = ?').run(newProv.source_id);
-              }
-            }
-          }
+          // Resolve contradiction: keep canonical, archive current.
+          // logContradiction already updates agent stats, so we only record the archive here.
+          stmts.archiveMemoryById.run(current.id);
+          stmts.insertContradiction.run(current.id, canonical.id, `Consolidated contradiction: resolved in favor of canonical #${canonical.id}`);
 
           archivedIds.push(current.id);
           visited.add(current.id);
         } else if (rel.type === 'subset') {
           if (rel.keep === 'b') {
             // current (B) is a superset of canonical (A). Swap them
-            db.prepare('UPDATE memories SET valid_until = unixepoch() WHERE id = ?').run(canonical.id);
-            db.prepare('INSERT INTO contradictions (old_memory_id, new_memory_id, resolution_reason) VALUES (?, ?, ?)')
-              .run(canonical.id, current.id, `Consolidated subset: replaced by more detailed #${current.id}`);
+            stmts.archiveMemoryById.run(canonical.id);
+            stmts.insertContradiction.run(canonical.id, current.id, `Consolidated subset: replaced by more detailed #${current.id}`);
 
             archivedIds.push(canonical.id);
             canonical = current;
           } else {
             // canonical is superset
-            db.prepare('UPDATE memories SET valid_until = unixepoch() WHERE id = ?').run(current.id);
-            db.prepare('INSERT INTO contradictions (old_memory_id, new_memory_id, resolution_reason) VALUES (?, ?, ?)')
-              .run(current.id, canonical.id, `Consolidated subset: subsumed by more detailed #${canonical.id}`);
+            stmts.archiveMemoryById.run(current.id);
+            stmts.insertContradiction.run(current.id, canonical.id, `Consolidated subset: subsumed by more detailed #${canonical.id}`);
 
             archivedIds.push(current.id);
           }
           visited.add(current.id);
         } else if (rel.type === 'duplicate') {
-          db.prepare('UPDATE memories SET valid_until = unixepoch() WHERE id = ?').run(current.id);
-          db.prepare('INSERT INTO contradictions (old_memory_id, new_memory_id, resolution_reason) VALUES (?, ?, ?)')
-            .run(current.id, canonical.id, `Consolidated duplicate of #${canonical.id}`);
+          stmts.archiveMemoryById.run(current.id);
+          stmts.insertContradiction.run(current.id, canonical.id, `Consolidated duplicate of #${canonical.id}`);
 
           archivedIds.push(current.id);
           visited.add(current.id);
@@ -617,6 +608,10 @@ export async function consolidateMemories(namespace = null) {
         });
       }
     }
+  });
+
+  for (const mem of activeMemories) {
+    consolidateOne(mem);
   }
 
   return {
@@ -624,4 +619,76 @@ export async function consolidateMemories(namespace = null) {
     consolidated_groups: consolidated.length,
     details: consolidated
   };
+}
+
+/**
+ * Classify context retrieval intent and urgency level using heuristic analysis.
+ */
+function classifyIntentAndUrgency(queryText, intentParam = null) {
+  const queryLower = (queryText || '').toLowerCase();
+  
+  // 1. Determine Intent
+  let intent = intentParam || 'general';
+  if (intent === 'general' || !intent) {
+    if (/(?:db|database|sqlite|sql|table|migration|schema)/i.test(queryLower)) {
+      intent = 'database_management';
+    } else if (/(?:deploy|ci|cd|vercel|publish|release|prod|staging)/i.test(queryLower)) {
+      intent = 'deployment';
+    } else if (/(?:style|css|html|theme|design|layout|align|color|font)/i.test(queryLower)) {
+      intent = 'ui_styling';
+    } else if (/(?:test|spec|unit|mock|heavy|smoke)/i.test(queryLower)) {
+      intent = 'testing';
+    } else if (/(?:error|bug|fail|crash|break|exception|stack|trace|refused|debug)/i.test(queryLower)) {
+      intent = 'debugging';
+    }
+  }
+
+  // 2. Determine Urgency
+  let urgency = 'low';
+  if (/(?:panic|emergency|broken|critical|urgent|fatal|security|leak|bypass|vulnerability)/i.test(queryLower)) {
+    urgency = 'critical';
+  } else if (/(?:fail|error|crash|prevent|stop|warn|warning|issue|broken)/i.test(queryLower)) {
+    urgency = 'high';
+  } else if (/(?:update|change|add|tweak|check|verify)/i.test(queryLower)) {
+    urgency = 'medium';
+  }
+
+  return { intent, urgency };
+}
+
+/**
+ * Generate actionable suggested actions based on active memories and query classification.
+ */
+function generateSuggestedActions(memories, intent, urgency) {
+  const actions = [];
+
+  // General recommendation based on intent
+  if (intent === 'debugging') {
+    actions.push('Inspect the recent error logs and verify SQLite/system constraints.');
+  } else if (intent === 'ui_styling') {
+    actions.push('Verify UI layouts conform to user design preferences.');
+  } else if (intent === 'database_management') {
+    actions.push('Ensure database migrations are applied and referential integrity is checked.');
+  }
+
+  for (const m of memories) {
+    const content = m.content.toLowerCase();
+    
+    // Check for rules/decisions in memory content
+    if (content.includes('decision:') || content.includes('rule:')) {
+      actions.push(`Adhere to guideline: ${m.content.slice(0, 100)}...`);
+    } else if (content.includes('prefer')) {
+      actions.push(`Apply user preference: ${m.content.slice(0, 100)}...`);
+    } else if (content.includes('error') || content.includes('bug') || content.includes('fix')) {
+      actions.push(`Reference past fix: ${m.content.slice(0, 100)}...`);
+    }
+  }
+
+  // Safety guideline if critical
+  if (urgency === 'critical') {
+    actions.unshift('CAUTION: Address security, vulnerability, or critical stability factors immediately.');
+  }
+
+  // Deduplicate
+  return Array.from(new Set(actions));
 }

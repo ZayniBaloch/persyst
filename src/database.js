@@ -17,6 +17,8 @@ import { join } from 'path';
 import { homedir } from 'os';
 import { mkdirSync } from 'fs';
 
+import { logInfo } from './text-utils.js';
+
 // ============================================================
 // DATABASE LOCATION
 // Store in ~/.persyst/ per default to persist across sessions
@@ -34,11 +36,14 @@ const db = new Database(DB_PATH);
 db.pragma('journal_mode = WAL');   // Better performance for concurrent reads
 db.pragma('foreign_keys = ON');    // Enforce referential integrity
 db.pragma('mmap_size = 268435456'); // 256MB memory-mapped I/O for faster reads
+db.pragma('synchronous = NORMAL');  // Performance boost for WAL mode
+db.pragma('temp_store = MEMORY');   // Keep temp tables in memory
+db.pragma('cache_size = -64000');   // 64MB cache size
 
 // Load sqlite-vec BEFORE creating any vec0 tables
 sqliteVec.load(db);
 
-console.error(`[persyst] Database: ${DB_PATH}`);
+logInfo(`[persyst] Database: ${DB_PATH}`);
 
 // ============================================================
 // CREATE TABLES & SCHEMA MIGRATIONS
@@ -60,27 +65,32 @@ db.exec(`
 `);
 
 // --- Migrations for bi-temporal validity on existing tables ---
-try {
+function columnExists(table, name) {
+  const info = db.prepare(`PRAGMA table_info(${table})`).all();
+  return info.some(col => col.name === name);
+}
+
+if (!columnExists('memories', 'valid_from')) {
   db.exec('ALTER TABLE memories ADD COLUMN valid_from INTEGER DEFAULT (unixepoch())');
-} catch (e) { /* Column already exists */ }
+}
 
-try {
+if (!columnExists('memories', 'valid_until')) {
   db.exec('ALTER TABLE memories ADD COLUMN valid_until INTEGER DEFAULT NULL');
-} catch (e) { /* Column already exists */ }
+}
 
-try {
+if (!columnExists('memories', 'assertion_time')) {
   db.exec('ALTER TABLE memories ADD COLUMN assertion_time INTEGER DEFAULT (unixepoch())');
-} catch (e) { /* Column already exists */ }
+}
 
 // --- Migration: add namespace column for per-agent isolation ---
-try {
+if (!columnExists('memories', 'namespace')) {
   db.exec("ALTER TABLE memories ADD COLUMN namespace TEXT DEFAULT 'shared'");
-} catch (e) { /* Column already exists */ }
+}
 
 // --- Migration: add parent_id column for history tracing ---
-try {
+if (!columnExists('memories', 'parent_id')) {
   db.exec('ALTER TABLE memories ADD COLUMN parent_id INTEGER DEFAULT NULL');
-} catch (e) { /* Column already exists */ }
+}
 
 // --- Index on namespace for fast filtered queries ---
 try {
@@ -221,7 +231,7 @@ db.exec(`
   )
 `);
 
-console.error('[persyst] Schema initialized ✓');
+logInfo('[persyst] Schema initialized ✓');
 
 // ============================================================
 // PREPARED STATEMENTS
@@ -323,14 +333,14 @@ const stmts = {
   boost: db.prepare(`
     UPDATE memories
     SET access_count    = access_count + 1,
-        importance_score = MIN(importance_score + 0.1, 2.0),
+        importance_score = ROUND(MIN(importance_score + 0.1, 1.0), 4),
         last_accessed   = unixepoch()
     WHERE id = ?
   `),
   decay: db.prepare(`
     UPDATE memories
-    SET importance_score = importance_score * 0.95
-    WHERE (? - last_accessed) > 604800
+    SET importance_score = ROUND(MAX(importance_score * 0.95, 0.0), 4)
+    WHERE (unixepoch() - last_accessed) > 604800
   `),
 
   // -- Search --
@@ -363,6 +373,11 @@ const stmts = {
   ),
   deleteEntity: db.prepare(
     'DELETE FROM entities WHERE id = ?'
+  ),
+  deleteEdgesByEntity: db.prepare(
+    `DELETE FROM edges WHERE
+     (source_id = ? AND source_type = 'entity') OR
+     (target_id = ? AND target_type = 'entity')`
   ),
 
   // -- Edges --
@@ -407,6 +422,30 @@ const stmts = {
     'SELECT namespace, COUNT(*) as count FROM memories WHERE valid_until IS NULL GROUP BY namespace ORDER BY count DESC'
   ),
 
+  // -- Content size stats (exact character & token counts) --
+  getContentStats: db.prepare(`
+    SELECT
+      COUNT(*)                      AS memory_count,
+      COALESCE(SUM(LENGTH(content)), 0)  AS total_chars,
+      COALESCE(AVG(LENGTH(content)), 0)  AS avg_chars,
+      COALESCE(MAX(LENGTH(content)), 0)  AS max_chars,
+      COALESCE(MIN(LENGTH(content)), 0)  AS min_chars
+    FROM memories
+    WHERE valid_until IS NULL
+  `),
+
+  // -- Namespace-level content stats --
+  getNamespaceContentStats: db.prepare(`
+    SELECT
+      namespace,
+      COUNT(*)                      AS count,
+      COALESCE(SUM(LENGTH(content)), 0) AS total_chars
+    FROM memories
+    WHERE valid_until IS NULL
+    GROUP BY namespace
+    ORDER BY total_chars DESC
+  `),
+
   // -- Memory History Chain (Feature 6: prepared statements) --
   getContradictionAncestors: db.prepare(
     'SELECT old_memory_id FROM contradictions WHERE new_memory_id = ?'
@@ -423,8 +462,170 @@ const stmts = {
     INSERT INTO watched_files (file_path, last_position)
     VALUES (?, ?)
     ON CONFLICT(file_path) DO UPDATE SET last_position = excluded.last_position, updated_at = unixepoch()
+  `),
+
+  // -- Internal lookups (pre-compiled for hot-loop use) --
+  getAttestationByHash: db.prepare(
+    'SELECT * FROM attestations WHERE hash = ?'
+  ),
+  getMemoryParentId: db.prepare(
+    'SELECT parent_id FROM memories WHERE id = ?'
+  ),
+  getMemoryChildren: db.prepare(
+    'SELECT id FROM memories WHERE parent_id = ?'
+  ),
+  getMemoryContentById: db.prepare(
+    'SELECT content FROM memories WHERE id = ?'
+  ),
+  getMemoryByIdRaw: db.prepare(
+    'SELECT * FROM memories WHERE id = ? AND valid_until IS NULL'
+  ),
+  getMemoryLikeContent: db.prepare(
+    'SELECT id FROM memories WHERE content LIKE ? AND valid_until IS NULL'
+  ),
+  getVecByRowId: db.prepare(
+    'SELECT embedding FROM memories_vec WHERE rowid = ?'
+  ),
+  updateMemoryParentId: db.prepare(
+    'UPDATE memories SET parent_id = ? WHERE id = ?'
+  ),
+  deleteProvenanceByMemoryId: db.prepare(
+    'DELETE FROM provenance WHERE memory_id = ?'
+  ),
+  deleteContradictionsByMemoryId: db.prepare(
+    'DELETE FROM contradictions WHERE old_memory_id = ? OR new_memory_id = ?'
+  ),
+  getReputationScore: db.prepare(
+    'SELECT reputation_score FROM agent_stats WHERE agent_id = ?'
+  ),
+  updateProvenanceOwner: db.prepare(
+    "UPDATE provenance SET source_type = 'agent', source_id = ?, confidence = 1.0 WHERE memory_id = ?"
+  ),
+  archiveMemoryById: db.prepare(
+    'UPDATE memories SET valid_until = unixepoch() WHERE id = ?'
+  ),
+  getEdgesBySourceAndType: db.prepare(`
+    SELECT * FROM edges
+    WHERE (source_id = ? AND source_type = ?)
+       OR (target_id = ? AND target_type = ?)
+  `),
+  getMemoriesByEntityEdges: db.prepare(`
+    SELECT * FROM edges
+    WHERE (source_id = ? AND source_type = 'entity' AND target_type = 'memory')
+       OR (target_id = ? AND target_type = 'entity' AND source_type = 'memory')
+  `),
+  consolidateVecSearch: db.prepare(`
+    SELECT rowid AS id, distance
+    FROM memories_vec
+    WHERE embedding MATCH ?
+    AND k = 30
+  `),
+  archiveAndInsertContradiction: db.prepare(
+    'UPDATE memories SET valid_until = unixepoch() WHERE id = ?'
+  ),
+  archiveExpiredTransientMemories: db.prepare(`
+    UPDATE memories 
+    SET valid_until = unixepoch() 
+    WHERE valid_until IS NULL 
+      AND (content LIKE 'Reminder:%' OR content LIKE 'Note:%') 
+      AND (unixepoch() - created_at) > 1209600
   `)
 };
+
+export { stmts };
+
+// ============================================================
+// SECRET DETECTION & REDACTION HELPERS
+// ============================================================
+
+/**
+ * Detects sensitive/credential patterns in a string and replaces values with [REDACTED].
+ * @param {string} content - The content to sanitize
+ * @returns {string} Sanitized content
+ */
+export function redactSecrets(content) {
+  if (!content || typeof content !== 'string') return content;
+
+  let redacted = content;
+
+  // 1. Redact credentials in connection strings / URIs
+  // Matches scheme://user:pass@host and scheme://:pass@host
+  const connectionStringRegex = /\b([a-zA-Z0-9+.-]+:\/\/)([^/:\s]*):([^@/:\s]+)(@[^/\s]+)/gi;
+  redacted = redacted.replace(connectionStringRegex, (match, protocol, user, pass, host) => {
+    return protocol + user + ':[REDACTED]' + host;
+  });
+
+  // 2. Redact key-value pairs matching credentials (retaining key/operator, redacting value)
+  // Supports single-quoted, double-quoted, and unquoted values (non-whitespace).
+  const kvRegex = /['"]?\b(api[_-]?key|secret[_-]?key|secret|password|passwd|pwd|passphrase|auth[_-]?token|access[_-]?token|client[_-]?secret|private[_-]?key|auth|access|client|aws|gcp|google|stripe|github|openai|vercel|heroku|slack|ssh[_-]?(?:key|password|passphrase|pass)?|credential|aws_secret|secret_access_key|aws_access_key|ssh_passphrase|ssh_password|ssh_key_pass)\b['"]?\s*(?:key|token|secret|password|pwd|passwd|value|string|id)?(?:\b|(?<=['"]))\s*([:=]|is|of|to|set\s+to|\(|\buses\b)\s*(?:'([^']{6,2048})'|"([^"]{6,2048})"|([^\s]+(?:\n(?![a-zA-Z0-9_-]+\s*[:=])(?=[^\s]+(?:\n|$))[^\s]+)*))/gi;
+
+  redacted = redacted.replace(kvRegex, (match, key, op, sqVal, dqVal, uqVal) => {
+    const val = sqVal || dqVal || uqVal;
+    if (!val) return match;
+
+    // Strip trailing parenthesis if operator is '(' and value has trailing parenthesis
+    let cleanVal = val;
+    if (op === '(' && val.endsWith(')')) {
+      cleanVal = val.slice(0, -1);
+    }
+
+    const lastIdx = match.lastIndexOf(cleanVal);
+    if (lastIdx !== -1) {
+      return match.slice(0, lastIdx) + '[REDACTED]' + match.slice(lastIdx + cleanVal.length);
+    }
+    return match;
+  });
+
+  // 3. Redact standalone common API keys and tokens
+  const standalonePatterns = [
+    /\b(sk-[a-zA-Z0-9]{48})\b/g, // OpenAI
+    /\b(sk-proj-[a-zA-Z0-9-]{40,})\b/g, // OpenAI project
+    /\b(gh[pous]_[a-zA-Z0-9]{36,255})\b/g, // GitHub PAT/Fine-grained
+    /\b(xox[bapr]-[0-9]{12}-[a-zA-Z0-9]{24})\b/g, // Slack token
+    /\b(AIzaSy[A-Za-z0-9_-]{33})\b/g, // Google API key
+    /\b((?:sk|rk|pk)_(?:live|test)_[0-9a-zA-Z]{24,32})\b/g, // Stripe key
+    /\b(AKIA[0-9A-Z]{16,40})\b/gi, // AWS Access Key ID (case-insensitive)
+    /\b(ASCA[0-9A-Z]{16,40})\b/gi, // AWS ASCA Key
+    /\b(npm_[a-zA-Z0-9]{36,255})\b/g, // npm token
+    /\b(ey[a-zA-Z0-9_-]{10,}\.[a-zA-Z0-9_-]{10,}\.[a-zA-Z0-9_-]{10,})\b/g, // JWT token
+    /-----BEGIN[A-Z0-9\s_-]+PRIVATE\s+KEY[A-Z0-9\s_-]*-----\s*[\s\S]*?-----END[A-Z0-9\s_-]+PRIVATE\s+KEY[A-Z0-9\s_-]*-----/gi, // PEM private key
+  ];
+
+  for (const pattern of standalonePatterns) {
+    redacted = redacted.replace(pattern, '[REDACTED]');
+  }
+
+  // 4. Robust credential shape heuristic (independent of strict key-value punctuation)
+  const containsCredKeyword = /\b(password|passwd|pwd|passphrase|pass|secret|token|api|credential|auth|ssh|aws)\b/i.test(redacted);
+  if (containsCredKeyword) {
+    // Match password-like tokens: length 6 to 64, containing both letters and digits/symbols
+    const tokenRegex = /\b([a-zA-Z0-9_@#$%^&*+!~\-]{6,64})(?!\w)/g;
+    
+    redacted = redacted.replace(tokenRegex, (match) => {
+      // Skip common query words and technical keywords
+      if (/^(password|passwd|pwd|passphrase|pass|secret|token|api|credential|auth|ssh|uses|with|key|from|here|what|have|this|that|your|same|then|want|more|base64|base64-like|base64-encoded|sha256|sha1|md5|aes256|aes128|utf8|utf-8|url|uri|ipv4|ipv6|http|https|sha-256|sha-1)$/i.test(match)) {
+        return match;
+      }
+      
+      const hasLetter = /[a-zA-Z]/.test(match);
+      const hasDigitOrSpecialSymbol = /[0-9@#$%^&*+=!~]/.test(match);
+      
+      if (hasLetter && hasDigitOrSpecialSymbol) {
+        // Require length >= 8 or containing special symbols/mixed case digits
+        const isStrongSecretCandidate = match.length >= 8 || 
+                                       (/[^a-zA-Z0-9_]/.test(match)) || 
+                                       (/[A-Z]/.test(match) && /[0-9]/.test(match));
+        
+        if (isStrongSecretCandidate) {
+          return '[REDACTED]';
+        }
+      }
+      return match;
+    });
+  }
+
+  return redacted;
+}
 
 // ============================================================
 // CRUD FUNCTIONS
@@ -440,10 +641,12 @@ const stmts = {
  * @returns {number} The new memory's ID
  */
 export function insertMemory(content, importance = 1.0, provenanceInfo = null, namespace = 'shared', parentId = null) {
-  if (content && content.length > 10000) {
+  const redactedContent = redactSecrets(content);
+  if (redactedContent && redactedContent.length > 10000) {
     throw new Error('Memory content exceeds maximum length of 10000 characters.');
   }
-  const result = stmts.insertMemory.run(content, importance, namespace || 'shared', parentId);
+  const clampedImportance = Math.max(0.0, Math.min(1.0, Math.round(importance * 10000) / 10000));
+  const result = stmts.insertMemory.run(redactedContent, clampedImportance, namespace || 'shared', parentId);
   const id = Number(result.lastInsertRowid);
 
   // Provenance Info handling
@@ -480,13 +683,12 @@ export function insertVector(id, embedding) {
  * @returns {object|null} The memory row, or null if not found
  */
 export function getMemory(id, namespace = null) {
-  const memory = namespace
-    ? stmts.getByIdNs.get(id, namespace)
-    : stmts.getById.get(id);
+  const memory = (namespace === 'all' || namespace === null)
+    ? stmts.getById.get(id)
+    : stmts.getByIdNs.get(id, namespace);
   if (memory) {
     boostMemory(id);
-    const prov = getProvenance(id);
-    memory.provenance = prov;
+    memory.provenance = getProvenance(id);
   }
   return memory || null;
 }
@@ -510,9 +712,9 @@ export function getAnyMemoryById(id) {
  * @returns {object|null} The memory row, or null if not found
  */
 export function getMemoryById(id, namespace = null) {
-  const memory = namespace
-    ? stmts.getByIdNs.get(id, namespace)
-    : stmts.getById.get(id);
+  const memory = (namespace === 'all' || namespace === null)
+    ? stmts.getById.get(id)
+    : stmts.getByIdNs.get(id, namespace);
   if (memory) {
     memory.provenance = getProvenance(id);
   }
@@ -525,7 +727,8 @@ export function getMemoryById(id, namespace = null) {
  * @returns {boolean} true if the memory existed and was updated
  */
 export function updateMemoryContent(id, content) {
-  const result = stmts.updateContent.run(content, id);
+  const redactedContent = redactSecrets(content);
+  const result = stmts.updateContent.run(redactedContent, id);
   return result.changes > 0;
 }
 
@@ -545,8 +748,8 @@ export function deleteMemory(id) {
   stmts.deleteEdgesByMemory.run(id, id);
   deleteVec(id);  // Remove vector first (no cascades on virtual tables)
   try {
-    db.prepare('DELETE FROM provenance WHERE memory_id = ?').run(id);
-    db.prepare('DELETE FROM contradictions WHERE old_memory_id = ? OR new_memory_id = ?').run(id, id);
+    stmts.deleteProvenanceByMemoryId.run(id);
+    stmts.deleteContradictionsByMemoryId.run(id, id);
   } catch (e) {
     console.error(`[persyst] Clean up provenance/contradictions error: ${e.message}`);
   }
@@ -557,12 +760,17 @@ export function deleteMemory(id) {
 /**
  * Get the N most recently created memories.
  * @param {number} limit - Max results
- * @param {string|null} namespace - Namespace filter (null = all)
+ * @param {string|null} namespace - Namespace filter (null = shared)
  */
 export function getRecentMemories(limit = 10, namespace = null) {
-  const rows = namespace
-    ? stmts.getRecentNs.all(namespace, limit)
-    : stmts.getRecent.all(limit);
+  if (typeof limit !== 'number' || isNaN(limit) || limit <= 0) {
+    throw new Error('Limit must be a positive integer.');
+  }
+  const parsedLimit = Math.floor(limit);
+  const ns = namespace || 'shared';
+  const rows = ns === 'all'
+    ? stmts.getRecent.all(parsedLimit)
+    : stmts.getRecentNs.all(ns, parsedLimit);
   rows.forEach(r => {
     r.provenance = getProvenance(r.id);
   });
@@ -572,12 +780,17 @@ export function getRecentMemories(limit = 10, namespace = null) {
 /**
  * Get the N most important memories (by importance_score).
  * @param {number} limit - Max results
- * @param {string|null} namespace - Namespace filter (null = all)
+ * @param {string|null} namespace - Namespace filter (null = shared)
  */
 export function getImportantMemories(limit = 10, namespace = null) {
-  const rows = namespace
-    ? stmts.getImportantNs.all(namespace, limit)
-    : stmts.getImportant.all(limit);
+  if (typeof limit !== 'number' || isNaN(limit) || limit <= 0) {
+    throw new Error('Limit must be a positive integer.');
+  }
+  const parsedLimit = Math.floor(limit);
+  const ns = namespace || 'shared';
+  const rows = ns === 'all'
+    ? stmts.getImportant.all(parsedLimit)
+    : stmts.getImportantNs.all(ns, parsedLimit);
   rows.forEach(r => {
     r.provenance = getProvenance(r.id);
   });
@@ -603,8 +816,7 @@ export function boostMemory(id) {
  * Called automatically every hour by the server.
  */
 export function applyTemporalDecay() {
-  const now = Math.floor(Date.now() / 1000);
-  const result = stmts.decay.run(now);
+  const result = stmts.decay.run();
   if (result.changes > 0) {
     console.error(`[persyst] Decay applied to ${result.changes} memories`);
   }
@@ -633,7 +845,11 @@ export function searchKeyword(query, limit = 10) {
  * @returns {Array<{rowid: number, distance: number}>}
  */
 export function searchVector(embedding, limit = 10) {
-  return stmts.searchVec.all(Buffer.from(embedding.buffer), limit);
+  if (typeof limit !== 'number' || isNaN(limit) || limit <= 0) {
+    throw new Error('Limit must be a positive integer.');
+  }
+  const parsedLimit = Math.floor(limit);
+  return stmts.searchVec.all(Buffer.from(embedding.buffer), parsedLimit);
 }
 
 // ============================================================
@@ -680,6 +896,7 @@ export function getAllEntities(limit = 50) {
  * Delete an entity and its edges.
  */
 export function deleteEntity(id) {
+  stmts.deleteEdgesByEntity.run(id, id);
   stmts.deleteEntity.run(id);
 }
 
@@ -694,11 +911,7 @@ export function insertEdge(sourceId, targetId, relation, sourceType, targetType)
  * Get all memories linked to an entity.
  */
 export function getMemoriesByEntity(entityId) {
-  const edges = db.prepare(`
-    SELECT * FROM edges 
-    WHERE (source_id = ? AND source_type = 'entity' AND target_type = 'memory')
-       OR (target_id = ? AND target_type = 'entity' AND source_type = 'memory')
-  `).all(entityId, entityId);
+  const edges = stmts.getMemoriesByEntityEdges.all(entityId, entityId);
   const memoryIds = edges.map(e => e.source_type === 'memory' ? e.source_id : e.target_id);
   return memoryIds.map(id => stmts.getById.get(id)).filter(Boolean);
 }
@@ -733,7 +946,7 @@ export function memoryExistsByHashPrefix(pattern) {
  * @returns {number}
  */
 export function getActiveMemoryCount(namespace = null) {
-  if (namespace) {
+  if (namespace && namespace !== 'all') {
     return stmts.getActiveMemoryCountNs.get(namespace).count;
   }
   return stmts.getActiveMemoryCount.get().count;
@@ -746,6 +959,41 @@ export function getActiveMemoryCount(namespace = null) {
 export function getNamespaceStats() {
   return stmts.getNamespaceStats.all();
 }
+
+/**
+ * Get exact content size metrics across all active memories.
+ * Returns real character counts — divide by 4 for a precise token estimate
+ * (standard GPT/Claude tokenizer approximation: ~4 chars per token).
+ * @returns {{ memory_count, total_chars, avg_chars, max_chars, min_chars }}
+ */
+export function getContentStats() {
+  const row = stmts.getContentStats.get();
+  const totalChars = Number(row.total_chars);
+  const avgChars   = Number(row.avg_chars);
+  return {
+    memory_count:     Number(row.memory_count),
+    total_chars:      totalChars,
+    avg_chars:        Math.round(avgChars),
+    max_chars:        Number(row.max_chars),
+    min_chars:        Number(row.min_chars),
+    // Exact token estimate (chars / 4 — standard tokenizer approximation)
+    raw_tokens_exact: Math.ceil(totalChars / 4),
+  };
+}
+
+/**
+ * Get per-namespace content size stats with exact character counts.
+ * @returns {Array<{namespace, count, total_chars, raw_tokens_exact}>}
+ */
+export function getNamespaceContentStats() {
+  return stmts.getNamespaceContentStats.all().map(row => ({
+    namespace:        row.namespace,
+    count:            Number(row.count),
+    total_chars:      Number(row.total_chars),
+    raw_tokens_exact: Math.ceil(Number(row.total_chars) / 4),
+  }));
+}
+
 
 // ============================================================
 // DEDUPLICATION BY EXACT CONTENT
@@ -761,7 +1009,7 @@ export function getMemoryByContent(content, namespace = null) {
   const row = namespace
     ? stmts.findMemoryByContentNs.get(content, namespace)
     : stmts.findMemoryByContent.get(content);
-  return row ? getMemoryById(row.id) : null;
+  return row ? getMemoryById(row.id, namespace) : null;
 }
 
 // ============================================================
@@ -779,7 +1027,7 @@ export function logContradiction(oldMemoryId, newMemoryId, reason = '') {
   try {
     const parentId = Math.min(oldMemoryId, newMemoryId);
     const childId = Math.max(oldMemoryId, newMemoryId);
-    db.prepare('UPDATE memories SET parent_id = ? WHERE id = ?').run(parentId, childId);
+    stmts.updateMemoryParentId.run(parentId, childId);
   } catch (e) {
     console.error(`[persyst] Failed to set parent_id on contradiction: ${e.message}`);
   }
@@ -892,13 +1140,13 @@ export function getMemoryHistoryChain(memoryId) {
     versions.add(currentId);
 
     // 1. Find parent (ancestor) from memories table
-    const row = db.prepare('SELECT parent_id FROM memories WHERE id = ?').get(currentId);
+    const row = stmts.getMemoryParentId.get(currentId);
     if (row && row.parent_id !== null) {
       if (!versions.has(row.parent_id)) queue.push(row.parent_id);
     }
 
     // 2. Find children (descendants) from memories table
-    const children = db.prepare('SELECT id FROM memories WHERE parent_id = ?').all(currentId);
+    const children = stmts.getMemoryChildren.all(currentId);
     for (const child of children) {
       if (!versions.has(child.id)) queue.push(child.id);
     }
@@ -976,11 +1224,33 @@ export function upsertWatchPosition(filePath, position) {
 // ============================================================
 
 /**
+ * Archive transient memories (reminders and notes) older than 14 days.
+ * Returns the count of archived memories.
+ */
+export function archiveExpiredMemories() {
+  try {
+    const info = stmts.archiveExpiredTransientMemories.run();
+    if (info.changes > 0) {
+      console.error(`[persyst] Archived ${info.changes} expired transient memories (Note/Reminder older than 14 days).`);
+    }
+    return info.changes;
+  } catch (e) {
+    console.error(`[persyst] Failed to archive expired memories: ${e.message}`);
+    return 0;
+  }
+}
+
+/**
  * Close the database connection. Call on shutdown.
  */
 export function closeDatabase() {
   db.close();
   console.error('[persyst] Database closed');
 }
+
+// Run auto-expiry cleanup on database startup to prune transient bloat immediately
+try {
+  archiveExpiredMemories();
+} catch (_) {}
 
 export default db;

@@ -1,29 +1,32 @@
 #!/usr/bin/env node
 
 /**
- * persyst-init — Workspace rules generator for VS Code-based IDEs (Cursor, Windsurf, Antigravity)
+ * persyst-init — Workspace rules generator and global IDE configuration builder
  * 
  * Usage:
  *   npx persyst-mcp init
+ *   npx persyst-mcp init --mcp cursor,aider
  * 
  * What it does:
- *   1. Safely creates or appends system instructions to `.cursorrules`
- *   2. Safely creates or appends system instructions to `.windsurfrules`
- *   3. Creates a general `.persystrules.md` copy-pasteable guide
- *   4. Prints instructions on configuring MCP servers in Cursor/VS Code/Antigravity
- * 
- * Design:
- *   - Non-destructive: checks for existing content before appending to avoid duplication
- *   - Idempotent: safe to run multiple times
- *   - Localized: targets the current working directory (project root)
+ *   1. Safely creates or appends system instructions to `.cursorrules` and `.windsurfrules`
+ *   2. Creates a general `.persystrules.md` workspace guide
+ *   3. Configures Git post-commit hook for auto-ingestion
+ *   4. Generates cryptographic Ed25519 keys inside ~/.persyst
+ *   5. Automatically detects and configures global settings for Cursor, Aider, Claude Code, and Continue
  */
 
 import { existsSync, readFileSync, writeFileSync, mkdirSync, chmodSync } from 'fs';
-import { join, resolve, dirname } from 'path';
+import { join, resolve, dirname, basename } from 'path';
+import { homedir } from 'os';
 import { fileURLToPath } from 'url';
+import { execSync } from 'child_process';
+import { initializeKeys } from '../src/attestation.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
+
+const CONFIG_DIR = join(homedir(), '.persyst');
+const PERSYST_DB = join(CONFIG_DIR, 'persyst.db');
 
 // ============================================================
 // SYSTEM INSTRUCTION CONTENT
@@ -45,6 +48,10 @@ You are integrated with Persyst, a local-first MCP memory server that stores use
 - Agentic Swarms & Namespaces: If you are part of a multi-agent swarm or need private partition, pass your agent name as \`agent_id\` and set \`shared: false\` to store private memories. For general project guidelines and files, leave \`shared: true\` (default) so other agents can access them.
 - Handle Contradictions: Persyst handles contradiction detection automatically. If a new fact contradicts an old memory, Persyst will flag it.
 - Quality Over Quantity: Do NOT store trivial facts, temporary conversation noise, or duplicate data. "Bad data is worse than no data". Only store long-term architecture decisions, project details, and explicit user preferences.
+
+## Explicit User Save Requests
+- If the user explicitly asks you to remember, save, or keep a note of a fact (e.g., "Remember that John handles deployment", "remind me that staging is flaky"), call the \`add_memory\` tool immediately with that content.
+- Bypassing Tech Filters: Explicit user requests bypass the programming keyword filters. Ensure they are captured verbatim.
 
 ## Mandatory Completion Checklist (HARD CONSTRAINT)
 Before writing your final response declaring a task, feature, or bug fix complete:
@@ -82,7 +89,7 @@ ${RULE_CONTENT.trim()}
 `;
 
 // ============================================================
-// HELPERS
+// WORKSPACE HELPERS
 // ============================================================
 
 function setupRuleFile(filePath, fileName) {
@@ -92,7 +99,7 @@ function setupRuleFile(filePath, fileName) {
   if (existsSync(filePath)) {
     const existing = readFileSync(filePath, 'utf8');
     if (existing.includes(INSTRUCTION_HEADER)) {
-      console.log(`     ℹ️  ${fileName} already has Persyst rules configured (skipped).`);
+      console.log(`     [SKIP] ${fileName} already has Persyst rules configured.`);
       return;
     }
     content = existing + '\n' + RULE_CONTENT;
@@ -100,37 +107,166 @@ function setupRuleFile(filePath, fileName) {
   }
 
   writeFileSync(filePath, content.trim() + '\n', 'utf8');
-  console.log(`     ✅ ${action} ${fileName}`);
+  console.log(`     [OK] ${action} ${fileName}`);
 }
 
 // ============================================================
-// MAIN
+// GLOBAL CONFIG WRITERS
+// ============================================================
+
+function detectEditors() {
+  const editors = [];
+  const home = homedir();
+  
+  // Cursor
+  const cursorDir = join(home, '.cursor');
+  const winCursorDir = join(home, 'AppData', 'Roaming', 'Cursor');
+  if (existsSync(cursorDir) || existsSync(winCursorDir) || existsSync('/Applications/Cursor.app') || existsSync(join(home, 'AppData', 'Local', 'Programs', 'cursor'))) {
+    editors.push('cursor');
+  }
+  
+  // Aider
+  try {
+    execSync('aider --version', { stdio: 'ignore' });
+    editors.push('aider');
+  } catch (_) {}
+  
+  // Claude Code
+  const claudeDir = join(home, '.claude');
+  if (existsSync(claudeDir) || existsSync('/Applications/Claude Code.app')) {
+    editors.push('claude-code');
+  }
+  
+  // Continue.dev
+  const continueConfig = join(home, '.continue', 'config.json');
+  if (existsSync(continueConfig)) {
+    editors.push('continue');
+  }
+  
+  return editors;
+}
+
+function writeCursorConfig(projectName) {
+  const cursorMcp = join(homedir(), '.cursor', 'mcp.json');
+  try {
+    const config = existsSync(cursorMcp) ? JSON.parse(readFileSync(cursorMcp, 'utf8')) : {};
+    config.mcpServers = config.mcpServers || {};
+    config.mcpServers.persyst = {
+      "command": "npx",
+      "args": ["-y", "persyst-mcp"],
+      "env": {
+        "PERSYST_DB": PERSYST_DB,
+        "PERSYST_PROJECT": projectName
+      }
+    };
+    mkdirSync(dirname(cursorMcp), { recursive: true });
+    writeFileSync(cursorMcp, JSON.stringify(config, null, 2));
+    console.log('     [OK] Cursor MCP config written to ~/.cursor/mcp.json');
+  } catch (err) {
+    console.error(`     [ERROR] Failed to configure Cursor: ${err.message}`);
+  }
+}
+
+function writeAiderConfig(projectName) {
+  const aiderYml = join(homedir(), '.aider.conf.yml');
+  try {
+    let content = '';
+    if (existsSync(aiderYml)) {
+      content = readFileSync(aiderYml, 'utf8');
+    }
+    if (!content.includes('persyst')) {
+      content += `\n# Persyst MCP integration\nmcp:\n  - name: persyst\n    cmd: npx\n    args: ["-y", "persyst-mcp"]\n    env:\n      PERSYST_DB: ${PERSYST_DB}\n      PERSYST_PROJECT: ${projectName}\n`;
+      writeFileSync(aiderYml, content);
+      console.log('     [OK] Aider MCP config appended to ~/.aider.conf.yml');
+    } else {
+      console.log('     [SKIP] Aider already has Persyst configured.');
+    }
+  } catch (err) {
+    console.error(`     [ERROR] Failed to configure Aider: ${err.message}`);
+  }
+}
+
+function writeClaudeCodeConfig(projectName) {
+  const claudeJson = join(homedir(), '.claude.json');
+  try {
+    const config = existsSync(claudeJson) ? JSON.parse(readFileSync(claudeJson, 'utf8')) : {};
+    config.mcpServers = config.mcpServers || {};
+    config.mcpServers.persyst = {
+      "command": "npx",
+      "args": ["-y", "persyst-mcp"],
+      "env": {
+        "PERSYST_DB": PERSYST_DB,
+        "PERSYST_PROJECT": projectName
+      }
+    };
+    writeFileSync(claudeJson, JSON.stringify(config, null, 2));
+    console.log('     [OK] Claude Code MCP config written to ~/.claude.json');
+  } catch (err) {
+    console.error(`     [ERROR] Failed to configure Claude Code: ${err.message}`);
+  }
+}
+
+function writeContinueConfig(projectName) {
+  const continueConfig = join(homedir(), '.continue', 'config.json');
+  try {
+    const config = existsSync(continueConfig) ? JSON.parse(readFileSync(continueConfig, 'utf8')) : {};
+    config.mcpServers = config.mcpServers || [];
+    // Remove existing persyst entry
+    config.mcpServers = config.mcpServers.filter(s => s.name !== 'persyst');
+    config.mcpServers.push({
+      "name": "persyst",
+      "command": "npx",
+      "args": ["-y", "persyst-mcp"],
+      "env": {
+        "PERSYST_DB": PERSYST_DB,
+        "PERSYST_PROJECT": projectName
+      }
+    });
+    mkdirSync(dirname(continueConfig), { recursive: true });
+    writeFileSync(continueConfig, JSON.stringify(config, null, 2));
+    console.log('     [OK] Continue.dev MCP config written to ~/.continue/config.json');
+  } catch (err) {
+    console.error(`     [ERROR] Failed to configure Continue.dev: ${err.message}`);
+  }
+}
+
+// ============================================================
+// MAIN RUNNER
 // ============================================================
 
 function run() {
   console.log('');
-  console.log('  🧠 Persyst — Workspace Rules Setup');
-  console.log('  ════════════════════════════════════');
+  console.log('  Persyst — Workspace & Editor Setup');
+  console.log('  ══════════════════════════════════════');
   console.log('');
 
   const cwd = process.cwd();
-  console.log(`  📁 Target workspace: ${cwd}`);
-  console.log('');
+  console.log(`  Target workspace: ${cwd}`);
 
-  // 1. Create/Append Cursor Rules
+  // 1. Initialize local configuration folder and attestations
+  console.log('  [1/4] Initializing keypairs & DB folders...');
+  mkdirSync(CONFIG_DIR, { recursive: true });
+  initializeKeys();
+  console.log('     [OK] Cryptographic keypairs generated');
+
+  // 2. Local workspace configurations
+  console.log('');
+  console.log('  [2/4] Initializing workspace rule files...');
+  
   const cursorRulesPath = join(cwd, '.cursorrules');
   setupRuleFile(cursorRulesPath, '.cursorrules');
 
-  // 2. Create/Append Windsurf Rules
   const windsurfRulesPath = join(cwd, '.windsurfrules');
   setupRuleFile(windsurfRulesPath, '.windsurfrules');
 
-  // 3. Create General Guide File
+  const clineRulesPath = join(cwd, '.clinerules');
+  setupRuleFile(clineRulesPath, '.clinerules');
+
   const generalGuidePath = join(cwd, '.persystrules.md');
   writeFileSync(generalGuidePath, GENERAL_GUIDE.trim() + '\n', 'utf8');
-  console.log('     ✅ Created .persystrules.md (General Guide)');
+  console.log('     [OK] Created .persystrules.md (General Guide)');
 
-  // 4. Configure Git post-commit hook for automatic commit ingestion
+  // 3. Git post-commit hook
   const gitDir = join(cwd, '.git');
   if (existsSync(gitDir)) {
     const hooksDir = join(gitDir, 'hooks');
@@ -156,25 +292,36 @@ fi
     try {
       chmodSync(postCommitPath, 0o755);
     } catch (_) {}
-    console.log('     ✅ Configured Git post-commit hook for auto-ingestion');
+    console.log('     [OK] Configured Git post-commit hook for auto-ingestion');
   }
 
-  // 5. Print Success & Configuration Help
+  // 4. Global editor configurations
   console.log('');
-  console.log('  ════════════════════════════════════');
-  console.log('  ✅ Rules and Git hooks initialization complete!');
+  console.log('  [3/4] Initializing global IDE configurations...');
+  
+  const args = process.argv.slice(2);
+  const mcpFlag = args.find(a => a.startsWith('--mcp='));
+  const requestedEditors = mcpFlag ? mcpFlag.split('=')[1].split(',') : [];
+  
+  const editors = requestedEditors.length > 0 ? requestedEditors : detectEditors();
+  console.log(`     Detected editors/environments: ${editors.join(', ') || 'none'}`);
+
+  const projectName = basename(cwd);
+
+  if (editors.includes('cursor')) writeCursorConfig(projectName);
+  if (editors.includes('aider')) writeAiderConfig(projectName);
+  if (editors.includes('claude-code')) writeClaudeCodeConfig(projectName);
+  if (editors.includes('continue')) writeContinueConfig(projectName);
+
+  // 5. Final self-test and notes
   console.log('');
-  console.log('  To connect the memory server to Cursor, Antigravity, or VS Code:');
-  console.log('    1. Open your IDE Settings -> MCP (Model Context Protocol).');
-  console.log('    2. Add a new command server:');
-  console.log('         • Name:      persyst');
-  console.log('         • Command:   npx');
-  console.log('         • Arguments: -y persyst-mcp');
+  console.log('  ══════════════════════════════════════');
+  console.log('  Setup complete: Persyst is successfully configured.');
   console.log('');
-  console.log('  The rules we generated will guide the AI agents in this workspace to:');
-  console.log('    • Proactively search memory before answering prompts.');
-  console.log('    • Log milestone achievements and user preferences.');
-  console.log('    • Keep the memory clean ("no bad data").');
+  console.log('  Next steps:');
+  console.log('    1. Restart your editor to load the new MCP configurations.');
+  console.log('    2. Test gateway connection:');
+  console.log('         curl http://127.0.0.1:4321/health');
   console.log('');
 }
 

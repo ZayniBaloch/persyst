@@ -68,7 +68,7 @@ if (process.platform === 'win32') {
     }
   }
 
-  // Ensure system folders are present
+  // Ensure system folders are present done by hot fix
   const systemBin = 'C:\\WINDOWS\\system32;C:\\WINDOWS';
   const sysPaths = systemBin.split(';');
   sysPaths.forEach(p => {

@@ -39,7 +39,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 // ============================================================
-// CONFIGURATION
+// CONFIGURATIONS
 // ============================================================
 
 // Minimum prompt length to trigger memory search (skip "y", "ok", "/run", etc.)

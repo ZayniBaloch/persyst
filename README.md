@@ -45,7 +45,7 @@ This command automatically:
 
 ## Manual MCP Configuration
 
-If you prefer to configure your agent manually, add the MCP server definition to your editor:
+If you prefer to configure your agent manually,then add the MCP server definition to your editor:
 
 ### Claude Code (`~/.claude.json`) & Claude Desktop
 ```json
